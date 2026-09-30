@@ -51,22 +51,21 @@ def test_cpuqvm_mixed_pauli_rotation_matches_numpy_probabilities():
     assert np.allclose(actual, expected, atol=1e-8, rtol=0.0)
 
 
-def test_cpuqvm_probability_indices_are_little_endian():
+def test_cpuqvm_probability_indices_put_q0_at_lsb_for_non_palindrome_state():
     probability = run_bfdcqo_probabilities(
         n=3,
-        ry_angles=np.array([math.pi, 0.0, math.pi]),
+        ry_angles=np.array([math.pi, 0.0, 0.0]),
         trotter_layers=[],
     )
 
-    assert int(np.argmax(probability)) == 0b101
-    assert np.isclose(probability[0b101], 1.0, atol=1e-8)
+    assert int(np.argmax(probability)) == 0b001
+    assert np.isclose(probability[0b001], 1.0, atol=1e-8)
 
 
-def test_cpuqvm_count_bitstrings_match_probability_index_order():
+def test_cpuqvm_count_bitstrings_put_q0_at_lsb_for_non_palindrome_state():
     shots = 128
     program = QProg(3)
-    for qubit, angle in enumerate((math.pi, 0.0, math.pi)):
-        program << RY(qubit, angle)
+    program << RY(0, math.pi)
     program << measure(list(range(3)), list(range(3)))
 
     machine = CPUQVM()
@@ -76,5 +75,5 @@ def test_cpuqvm_count_bitstrings_match_probability_index_order():
         for bits, count in machine.result().get_counts().items()
     }
 
-    assert counts == {"101": shots}
+    assert counts == {"001": shots}
     assert sum(counts.values()) == shots
