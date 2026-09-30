@@ -15,7 +15,7 @@
 | 原生 HUBO | `PolynomialIsingProblem` | 任意阶对角 Pauli-Z 目标函数 |
 | MAX-3-SAT | `Max3SATProblem` | 原生三次 HUBO，也可作 Rosenberg QUBO 约化 |
 | 小规模精确参照 | `ExactSolver` | 为回归测试和诊断提供精确基态 |
-| QAOA 对照 | `QAOASolver` | 可检查的 p-layer QAOA benchmark 适配器 |
+| QAOA 对照 | `QAOASolver` | BFDCQO 模块内透明、可检查的 p-layer reference 实现；不是仓库上游公开 QAOA |
 
 ## 统一 API
 
@@ -108,6 +108,14 @@ print(result.best_solution, result.best_energy)
 - 基础、CVaR、自适应采样与 Hybrid 变体在固定小规模实例上的对照。
 
 这些内容将算法实现与可复现实验分开组织，benchmark 结果用于研究比较，不构成对大规模硬件表现的外推。
+
+模块内公开的 `QAOASolver` 是用于逐步核对算法和预算的透明 reference 实现，并非仓库已有的上游 `pyqpanda_alg.QAOA`。正式 CPUQVM 证据通过以下 benchmark 适配器直接调用仓库公开 QAOA：
+
+```python
+from pyqpanda_alg.BFDCQO.benchmark import UpstreamQAOASolver
+```
+
+官方表格将该路径标为 `pyqpanda_alg.QAOA.CPUQVM`，并按实际观测的 `circuit_evaluations × shots` 记录总采样数；两条 QAOA 路径不会混作同一个实现。
 
 ## 正确性验证
 

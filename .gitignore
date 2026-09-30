@@ -44,5 +44,3 @@ pyqpanda-algorithm/pyqpanda_alg/QSolver/*.lib
 /pyqpanda-algorithm/pyqpanda_alg/QSolver/libcurl.dll
 
 .ccls-cache
-# Local isolated worktrees
-.worktrees/
