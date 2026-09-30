@@ -144,7 +144,7 @@ def run_maxcut_benchmark(
                 q_circuit_evaluations = q.circuit_evaluations
                 q_label = "QAOA-p1-reference"
             else:
-                target_budget = qaoa_max_evals * qaoa_shots
+                target_budget = (qaoa_max_evals + 2) * qaoa_shots
                 q = UpstreamQAOASolver(
                     problem,
                     p=1,
@@ -231,8 +231,14 @@ def run_maxcut_benchmark(
             "bfdcqo_backend": bf_backend_label,
             "qaoa_implementation": qaoa_implementation,
             "qaoa_backend": qaoa_backend_label,
+            "seeds": [int(seed) for seed in seeds],
             "qaoa_shots": int(qaoa_shots),
             "qaoa_max_evals": int(qaoa_max_evals),
+            "qaoa_final_shots": (
+                int(qaoa_final_shots)
+                if qaoa_implementation == "reference"
+                else None
+            ),
         },
         # Retained for consumers of the original benchmark schema.
         "qaoa_backend": qaoa_backend_label,

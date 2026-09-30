@@ -225,6 +225,7 @@ def run_max3sat_benchmark(
                 "ancillas": 0,
                 "opt_satisfied_weight": opt_sat,
                 "best_satisfied_weight": bf_best_sat,
+                "best_logical_solution": bf.best_solution,
                 "best_approx_ratio": bf_best_sat / opt_sat if opt_sat > 0 else 1.0,
                 "p_opt_logical": bf_last.ground_state_probability,
                 "expected_satisfied_weight": app.total_weight - bf_last.expected_energy,
@@ -259,7 +260,7 @@ def run_max3sat_benchmark(
                 q_success = q.success
                 q_label = "QAOA-p1-reference"
             else:
-                target_budget = qaoa_max_evals * qaoa_shots
+                target_budget = (qaoa_max_evals + 2) * qaoa_shots
                 q = UpstreamQAOASolver(
                     qproblem, p=1, shots=qaoa_shots,
                     max_evals=qaoa_max_evals,
@@ -295,6 +296,7 @@ def run_max3sat_benchmark(
                 "ancillas": red.ancilla_count,
                 "opt_satisfied_weight": opt_sat,
                 "best_satisfied_weight": q_best_sat,
+                "best_logical_solution": logical_best,
                 "best_approx_ratio": q_best_sat / opt_sat if opt_sat > 0 else 1.0,
                 "p_opt_logical": lm["p_opt_logical"],
                 "expected_satisfied_weight": lm["expected_satisfied_weight"],
@@ -345,8 +347,14 @@ def run_max3sat_benchmark(
             "bfdcqo_backend": bf_backend_label,
             "qaoa_implementation": qaoa_implementation,
             "qaoa_backend": qaoa_backend_label,
+            "seeds": [int(seed) for seed in seeds],
             "qaoa_shots": int(qaoa_shots),
             "qaoa_max_evals": int(qaoa_max_evals),
+            "qaoa_final_shots": (
+                int(qaoa_final_shots)
+                if qaoa_implementation == "reference"
+                else None
+            ),
         },
         "qaoa_backend": qaoa_backend_label,
         "pyqpanda3_available": pyqpanda3_backend.available(),

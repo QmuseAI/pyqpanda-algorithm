@@ -123,10 +123,22 @@ def test_mwis_upstream_qaoa_cpuqvm_smoke_reports_observed_budget():
     } == {"pyqpanda3.CPUQVM"}
     qaoa = next(row for row in result["rows"] if row["solver"] == "QAOA-p1-upstream")
     assert qaoa["backend"] == "pyqpanda_alg.QAOA.CPUQVM"
+    assert len(qaoa["best_solution"]) == app.n
+    assert qaoa["feasible"] == app.is_independent_bitstring(qaoa["best_solution"])
+    assert qaoa["violations"] == app.violations_bitstring(qaoa["best_solution"])
+    assert 0.0 <= qaoa["weight_ratio"] <= 1.0 + 1e-12
+    assert 0.0 <= qaoa["p_opt"] <= 1.0
     assert qaoa["total_shots"] > 0
+    assert qaoa["target_shot_budget"] == 96
     assert qaoa["budget_delta"] == (
         qaoa["total_shots"] - qaoa["target_shot_budget"]
     )
+    assert result["config"]["qaoa_final_shots"] is None
+
+
+def test_mwis_rejects_unknown_qaoa_implementation():
+    with pytest.raises(ValueError, match="qaoa_implementation"):
+        run_mwis_hybrid_benchmark(qaoa_implementation="unknown")
 
 
 @pytest.mark.skipif(importlib.util.find_spec("pyqpanda3") is None, reason="pyqpanda3 not installed")

@@ -52,7 +52,7 @@ def test_maxcut_cpuqvm_benchmark_reports_observed_upstream_budget():
         bfdcqo_backend="pyqpanda",
         qaoa_implementation="upstream",
         qaoa_shots=32,
-        qaoa_max_evals=2,
+        qaoa_max_evals=4,
     )
     assert result["config"]["bfdcqo_backend"] == "pyqpanda3.CPUQVM"
     assert result["config"]["qaoa_backend"] == "pyqpanda_alg.QAOA.CPUQVM"
@@ -66,9 +66,16 @@ def test_maxcut_cpuqvm_benchmark_reports_observed_upstream_budget():
     assert qaoa_rows
     for row in qaoa_rows:
         assert row["backend"] == "pyqpanda_alg.QAOA.CPUQVM"
-        assert row["target_shot_budget"] == 64
+        assert row["target_shot_budget"] == 192
         assert row["total_shots"] == row["circuit_evaluations"] * 32
-        assert row["budget_delta"] == row["total_shots"] - 64
+        assert row["budget_delta"] == row["total_shots"] - 192
+    assert result["config"]["seeds"] == [3]
+    assert result["config"]["qaoa_final_shots"] is None
+
+
+def test_maxcut_rejects_unknown_qaoa_implementation():
+    with pytest.raises(ValueError, match="qaoa_implementation"):
+        run_maxcut_benchmark(qaoa_implementation="unknown")
 
 
 @pytest.mark.skipif(importlib.util.find_spec("pyqpanda3") is None, reason="pyqpanda3 not installed")

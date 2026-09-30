@@ -45,6 +45,7 @@ def _mwis_metrics(app: MWISProblem, bitstring: str, opt_weight: float) -> dict:
     feasible = app.is_independent_bitstring(bitstring)
     weight = app.weight_bitstring(bitstring) if feasible else 0.0
     return {
+        "best_solution": bitstring,
         "feasible": bool(feasible),
         "best_weight": float(weight),
         "weight_ratio": float(weight / opt_weight if opt_weight > 0 else 1.0),
@@ -80,8 +81,9 @@ def run_mwis_hybrid_benchmark(
 
       BF:   3 iterations x 24 shots = 72
       Reference QAOA: 4 objective evaluations x 12 shots + 24 final
-      shots = 72. The upstream path instead reports its observed CPUQVM
-      circuit count and may differ from the requested training budget.
+      shots = 72. The upstream target includes the same four optimizer calls
+      plus its mandatory final distribution and final loss circuits; observed
+      CPUQVM counts are still reported separately.
 
     Both hybrid variants use the *same* BF quantum stage and exactly
     ``2**local_neighborhood_size * local_rounds`` classical energy evaluations.
@@ -91,16 +93,15 @@ def run_mwis_hybrid_benchmark(
             "qaoa_implementation must be 'reference' or 'upstream'"
         )
     quantum_budget = int(quantum_budget)
-    if quantum_budget % 3 != 0:
-        raise ValueError("quantum_budget must be divisible by 3 for the fixed BF schedule")
+    if quantum_budget % 6 != 0:
+        raise ValueError(
+            "quantum_budget must be divisible by 6 for the BF/QAOA schedules"
+        )
     bf_shots = quantum_budget // 3
     # Keep the final sampling stage at one third; split the remaining two thirds
     # over four low-shot objective evaluations.
-    q_final = quantum_budget // 3
-    train_budget = quantum_budget - q_final
-    if train_budget % 4 != 0:
-        raise ValueError("quantum_budget-final_shots must be divisible by four")
-    q_shots_eval = train_budget // 4
+    q_shots_eval = quantum_budget // 6
+    q_final = quantum_budget - 4 * q_shots_eval
     if qaoa_backend == "auto":
         qaoa_backend = "pyqpanda" if pyqpanda3_backend.available() else "numpy"
     benchmark_instances = (
@@ -233,7 +234,7 @@ def run_mwis_hybrid_benchmark(
                 q_total_shots = q.total_shots
                 q_circuit_evaluations = q.circuit_evaluations
                 q_success = q_best_solution in ground_states
-                q_target_budget = 4 * q_shots_eval
+                q_target_budget = (4 + 2) * q_shots_eval
                 q_label = "QAOA-p1-upstream"
             q_t = time.perf_counter() - t0
             met = _mwis_metrics(app, q_best_solution, opt_weight)
@@ -289,13 +290,16 @@ def run_mwis_hybrid_benchmark(
                 "target_shot_budget": (
                     quantum_budget
                     if qaoa_implementation == "reference"
-                    else 4 * q_shots_eval
+                    else (4 + 2) * q_shots_eval
                 ),
             },
             "local": {"neighborhood_size": int(local_neighborhood_size), "rounds": int(local_rounds), "evaluations_per_run": int((2 ** min(local_neighborhood_size, 8)) * local_rounds)},
             "bfdcqo_backend": bf_backend_label,
             "qaoa_implementation": qaoa_implementation,
             "qaoa_backend": qaoa_backend_label,
+            "qaoa_final_shots": (
+                q_final if qaoa_implementation == "reference" else None
+            ),
             "pyqpanda3_available": pyqpanda3_backend.available(),
         },
         "rows": rows,

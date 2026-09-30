@@ -90,16 +90,31 @@ def test_max3sat_upstream_qaoa_uses_quadratized_cpuqvm_problem():
         bfdcqo_backend="pyqpanda",
         qaoa_implementation="upstream",
         qaoa_shots=32,
-        qaoa_max_evals=2,
+        qaoa_max_evals=4,
     )
     assert len(result["rows"]) == 2
     qaoa = next(row for row in result["rows"] if row["solver"] == "QAOA-p1-upstream")
     assert qaoa["backend"] == "pyqpanda_alg.QAOA.CPUQVM"
     assert qaoa["formulation"] == "Rosenberg-quadratized-QUBO"
     assert qaoa["solver_n"] > qaoa["logical_n"]
-    assert qaoa["target_shot_budget"] == 64
+    assert qaoa["target_shot_budget"] == 192
     assert qaoa["total_shots"] > 0
-    assert qaoa["budget_delta"] == qaoa["total_shots"] - 64
+    assert qaoa["budget_delta"] == qaoa["total_shots"] - 192
+    assert len(qaoa["best_logical_solution"]) == app.n
+    assert np.isclose(
+        app.satisfied_weight_bitstring(qaoa["best_logical_solution"]),
+        qaoa["best_satisfied_weight"],
+    )
+    assert 0.0 <= qaoa["p_opt_logical"] <= 1.0
+    assert 0.0 <= qaoa["best_approx_ratio"] <= 1.0 + 1e-12
+    assert 0.0 <= qaoa["expected_approx_ratio"] <= 1.0 + 1e-12
+    assert result["config"]["seeds"] == [0]
+    assert result["config"]["qaoa_final_shots"] is None
+
+
+def test_max3sat_rejects_unknown_qaoa_implementation():
+    with pytest.raises(ValueError, match="qaoa_implementation"):
+        run_max3sat_benchmark(qaoa_implementation="unknown")
 
 
 @pytest.mark.skipif(importlib.util.find_spec("pyqpanda3") is None, reason="pyqpanda3 not installed")
