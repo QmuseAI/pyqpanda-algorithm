@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from numbers import Integral
 from typing import Optional
+import warnings
 
 import numpy as np
 import sympy as sp
@@ -26,7 +28,17 @@ def ising_to_sympy(model: IsingProblem) -> sp.Expr:
     if not isinstance(model, IsingProblem):
         raise TypeError("model must be an IsingProblem")
 
-    variables = sp.symbols(f"x0:{model.n}")
+    if model.n == 0:
+        raise ValueError("upstream QAOA requires at least one variable")
+
+    # Upstream sorts symbols lexicographically.  Fixed-width names preserve
+    # numeric qubit order for dimensions where names such as x2 and x10 would
+    # otherwise be interleaved.
+    symbol_width = max(1, len(str(model.n - 1)))
+    variables = tuple(
+        sp.Symbol(f"x{index:0{symbol_width}d}")
+        for index in range(model.n)
+    )
     spins = [1 - 2 * variable for variable in variables]
     expression = sp.Float(model.offset)
 
@@ -51,9 +63,16 @@ def ising_to_sympy(model: IsingProblem) -> sp.Expr:
 
 @dataclass(frozen=True)
 class UpstreamQAOAResult:
-    """Observed output and execution budget of one upstream QAOA run."""
+    """Observed output and execution budget of one upstream QAOA run.
+
+    ``initial_parameter_seed`` controls only the locally generated optimizer
+    starting point.  CPUQVM shot sampling has its own randomness and is not
+    claimed to be reproducible from this value.
+    """
 
     distribution: dict[str, float]
+    initial_parameters: np.ndarray
+    initial_parameter_seed: Optional[int]
     parameters: np.ndarray
     loss: float
     objective_evaluations: int
@@ -70,6 +89,11 @@ class UpstreamQAOASolver:
     Upstream CPUQVM distributions already use the convention that q0 is the
     right-most (least-significant) bit.  Keys are therefore validated and
     preserved unchanged to match :meth:`IsingProblem.energy_bitstring`.
+
+    ``initial_parameter_seed`` seeds only a local NumPy generator used to
+    create the explicit optimizer starting point.  It does not seed CPUQVM
+    measurement sampling.  ``seed`` remains as a deprecated compatibility
+    alias and has the same deliberately narrow meaning.
     """
 
     def __init__(
@@ -79,22 +103,53 @@ class UpstreamQAOASolver:
         p: int = 1,
         shots: int = 1024,
         max_evals: int = 20,
+        initial_parameter_seed: Optional[int] = None,
         seed: Optional[int] = None,
     ) -> None:
         if not isinstance(model, IsingProblem):
             raise TypeError("model must be an IsingProblem")
-        if not isinstance(p, int) or p <= 0:
+        if model.n == 0:
+            raise ValueError("model must contain at least one variable")
+        if isinstance(p, bool) or not isinstance(p, Integral) or p <= 0:
             raise ValueError("p must be a positive integer")
-        if not isinstance(shots, int) or shots <= 0:
+        if isinstance(shots, bool) or not isinstance(shots, Integral) or shots <= 0:
             raise ValueError("shots must be a positive integer")
-        if not isinstance(max_evals, int) or max_evals <= 0:
+        if (
+            isinstance(max_evals, bool)
+            or not isinstance(max_evals, Integral)
+            or max_evals <= 0
+        ):
             raise ValueError("max_evals must be a positive integer")
+        if initial_parameter_seed is not None and seed is not None:
+            raise ValueError(
+                "pass initial_parameter_seed or deprecated seed, not both"
+            )
+        if seed is not None:
+            warnings.warn(
+                "seed is deprecated; use initial_parameter_seed (it controls "
+                "only optimizer initial parameters, not CPUQVM sampling)",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            initial_parameter_seed = seed
+        if initial_parameter_seed is not None and (
+            isinstance(initial_parameter_seed, bool)
+            or not isinstance(initial_parameter_seed, Integral)
+            or not 0 <= initial_parameter_seed < 2**32
+        ):
+            raise ValueError(
+                "initial_parameter_seed must be an integer in [0, 2**32)"
+            )
 
         self.model = model
-        self.p = p
-        self.shots = shots
-        self.max_evals = max_evals
-        self.seed = seed
+        self.p = int(p)
+        self.shots = int(shots)
+        self.max_evals = int(max_evals)
+        self.initial_parameter_seed = (
+            None
+            if initial_parameter_seed is None
+            else int(initial_parameter_seed)
+        )
         self._qaoa_instance: Optional[upstream_qaoa.QAOA] = None
 
     @property
@@ -112,19 +167,20 @@ class UpstreamQAOASolver:
         engine = upstream_qaoa.QAOA(expression)
         self._qaoa_instance = engine
 
-        random_state = np.random.get_state()
-        try:
-            if self.seed is not None:
-                np.random.seed(self.seed)
-            distribution, parameters, loss = engine.run(
-                layer=self.p,
-                shots=self.shots,
-                optimizer="COBYLA",
-                optimizer_option={"options": {"maxiter": self.max_evals}},
-            )
-        finally:
-            np.random.set_state(random_state)
+        initial_parameters = (
+            np.random.default_rng(self.initial_parameter_seed).random(self.p * 2)
+            * np.pi
+        )
+        distribution, parameters, loss = engine.run(
+            layer=self.p,
+            initial_para=initial_parameters.copy(),
+            shots=self.shots,
+            optimizer="COBYLA",
+            optimizer_option={"options": {"maxiter": self.max_evals}},
+        )
 
+        if not distribution:
+            raise RuntimeError("upstream QAOA must return a non-empty distribution")
         normalized_distribution = {
             str(bitstring): float(probability)
             for bitstring, probability in distribution.items()
@@ -140,12 +196,36 @@ class UpstreamQAOASolver:
                 "upstream QAOA returned invalid computational-basis keys: "
                 f"{invalid_keys!r}"
             )
+        probabilities = np.asarray(
+            list(normalized_distribution.values()), dtype=float
+        )
+        if not np.all(np.isfinite(probabilities)):
+            raise RuntimeError("upstream QAOA probabilities must be finite")
+        if np.any(probabilities < 0.0):
+            raise RuntimeError("upstream QAOA probabilities must be non-negative")
+        probability_total = float(probabilities.sum())
+        if not np.isfinite(probability_total) or probability_total <= 0.0:
+            raise RuntimeError(
+                "upstream QAOA probabilities must have a positive total"
+            )
+        normalized_distribution = {
+            bitstring: probability / probability_total
+            for bitstring, probability in normalized_distribution.items()
+        }
+
+        final_parameters = np.asarray(parameters, dtype=float).copy()
+        if not np.all(np.isfinite(final_parameters)) or not np.isfinite(loss):
+            raise RuntimeError(
+                "upstream QAOA parameters and loss must be finite"
+            )
 
         objective_evaluations = max(int(engine.iter) - 1, 0)
         circuit_evaluations = int(engine.circuit_iter)
         return UpstreamQAOAResult(
             distribution=normalized_distribution,
-            parameters=np.asarray(parameters, dtype=float).copy(),
+            initial_parameters=initial_parameters.copy(),
+            initial_parameter_seed=self.initial_parameter_seed,
+            parameters=final_parameters,
             loss=float(loss),
             objective_evaluations=objective_evaluations,
             circuit_evaluations=circuit_evaluations,

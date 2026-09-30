@@ -45,6 +45,25 @@ def test_ising_to_sympy_rejects_an_unconstrained_variable():
         ising_to_sympy(model)
 
 
+def test_symbol_order_matches_qubit_order_above_ten_variables():
+    fields = np.arange(1.0, 12.0)
+    model = IsingProblem(h=fields, J=np.zeros((11, 11)))
+    expression = ising_to_sympy(model)
+    engine = upstream_qaoa.QAOA(expression)
+
+    bit_two = [0] * model.n
+    bit_two[2] = 1
+    bit_ten = [0] * model.n
+    bit_ten[10] = 1
+
+    assert engine.calculate_energy(bit_two) == pytest.approx(
+        model.energy_bits(bit_two), abs=1e-12
+    )
+    assert engine.calculate_energy(bit_ten) == pytest.approx(
+        model.energy_bits(bit_ten), abs=1e-12
+    )
+
+
 def test_adapter_uses_repository_upstream_qaoa_class():
     assert upstream_qaoa is qaoa
     assert upstream_qaoa.QAOA is qaoa.QAOA
@@ -63,7 +82,7 @@ def test_real_cpuqvm_run_reports_observed_budget_and_little_endian_keys():
         p=1,
         shots=128,
         max_evals=8,
-        seed=0,
+        initial_parameter_seed=0,
     )
 
     result = adapter.run()
@@ -79,7 +98,106 @@ def test_real_cpuqvm_run_reports_observed_budget_and_little_endian_keys():
     assert result.parameters.shape == (2,)
     assert np.all(np.isfinite(result.parameters))
     assert np.isfinite(result.loss)
+    assert result.initial_parameter_seed == 0
+    assert np.array_equal(
+        result.initial_parameters,
+        np.random.default_rng(0).random(2) * np.pi,
+    )
     assert result.objective_evaluations == max(engine.iter - 1, 0)
     assert result.circuit_evaluations == engine.circuit_iter
     assert result.total_shots == result.circuit_evaluations * adapter.shots
     assert result.total_shots > adapter.shots
+
+
+def test_same_initial_parameter_seed_generates_same_explicit_initial_parameters(monkeypatch):
+    captured = []
+
+    def fake_run(engine, **kwargs):
+        captured.append(np.asarray(kwargs["initial_para"]).copy())
+        return {"0": 1.0}, np.asarray(kwargs["initial_para"]), 0.0
+
+    monkeypatch.setattr(upstream_qaoa.QAOA, "run", fake_run)
+    model = IsingProblem(h=np.array([1.0]), J=np.zeros((1, 1)))
+
+    first = UpstreamQAOASolver(
+        model, p=2, shots=4, max_evals=4, initial_parameter_seed=17
+    ).run()
+    second = UpstreamQAOASolver(
+        model, p=2, shots=4, max_evals=4, initial_parameter_seed=17
+    ).run()
+
+    assert np.array_equal(captured[0], captured[1])
+    assert np.array_equal(first.initial_parameters, second.initial_parameters)
+    assert first.initial_parameter_seed == second.initial_parameter_seed == 17
+
+
+@pytest.mark.parametrize(
+    ("distribution", "message"),
+    [
+        ({}, "non-empty"),
+        ({"0": float("nan")}, "finite"),
+        ({"0": -0.1, "1": 1.1}, "non-negative"),
+        ({"0": 0.0, "1": 0.0}, "positive total"),
+    ],
+)
+def test_invalid_upstream_distributions_are_rejected(monkeypatch, distribution, message):
+    def fake_run(engine, **kwargs):
+        return distribution, np.asarray(kwargs["initial_para"]), 0.0
+
+    monkeypatch.setattr(upstream_qaoa.QAOA, "run", fake_run)
+    model = IsingProblem(h=np.array([1.0]), J=np.zeros((1, 1)))
+
+    with pytest.raises(RuntimeError, match=message):
+        UpstreamQAOASolver(model, shots=4, max_evals=4).run()
+
+
+def test_upstream_distribution_is_normalized(monkeypatch):
+    def fake_run(engine, **kwargs):
+        return {"0": 2.0, "1": 1.0}, np.asarray(kwargs["initial_para"]), 0.0
+
+    monkeypatch.setattr(upstream_qaoa.QAOA, "run", fake_run)
+    model = IsingProblem(h=np.array([1.0]), J=np.zeros((1, 1)))
+
+    result = UpstreamQAOASolver(model, shots=4, max_evals=4).run()
+
+    assert result.distribution == pytest.approx({"0": 2 / 3, "1": 1 / 3})
+
+
+@pytest.mark.parametrize("name", ["p", "shots", "max_evals"])
+def test_bool_is_not_accepted_as_an_integer_parameter(name):
+    model = IsingProblem(h=np.array([1.0]), J=np.zeros((1, 1)))
+    arguments = {name: True}
+
+    with pytest.raises(ValueError, match=name):
+        UpstreamQAOASolver(model, **arguments)
+
+
+@pytest.mark.parametrize("seed", [True, -1, 1.5, "7", 2**32])
+def test_invalid_initial_parameter_seed_is_rejected(seed):
+    model = IsingProblem(h=np.array([1.0]), J=np.zeros((1, 1)))
+
+    with pytest.raises(ValueError, match="initial_parameter_seed"):
+        UpstreamQAOASolver(model, initial_parameter_seed=seed)
+
+
+def test_seed_alias_has_only_initial_parameter_semantics():
+    model = IsingProblem(h=np.array([1.0]), J=np.zeros((1, 1)))
+
+    with pytest.warns(DeprecationWarning, match="initial parameters"):
+        adapter = UpstreamQAOASolver(model, seed=7)
+
+    assert adapter.initial_parameter_seed == 7
+
+
+def test_seed_alias_cannot_be_combined_with_explicit_name():
+    model = IsingProblem(h=np.array([1.0]), J=np.zeros((1, 1)))
+
+    with pytest.raises(ValueError, match="not both"):
+        UpstreamQAOASolver(model, initial_parameter_seed=7, seed=7)
+
+
+def test_zero_variable_model_is_rejected():
+    model = IsingProblem(h=np.array([]), J=np.zeros((0, 0)))
+
+    with pytest.raises(ValueError, match="at least one variable"):
+        UpstreamQAOASolver(model)
