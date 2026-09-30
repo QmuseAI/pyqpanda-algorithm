@@ -13,6 +13,7 @@ from ..applications.max3sat import Max3SATProblem, max3sat_to_qubo
 from ..solvers import BFDCQO, QAOASolver, ExactSolver
 from ..backends import pyqpanda3_backend
 from ..backends.pyqpanda3_backend import pauli_rotation_resources
+from .upstream_qaoa import UpstreamQAOASolver
 
 
 def default_max3sat_instances() -> list[Max3SATProblem]:
@@ -126,13 +127,54 @@ def _logical_metrics_from_distribution(app: Max3SATProblem, prob: np.ndarray, fu
     }
 
 
-def run_max3sat_benchmark(*, seeds=(0, 1, 2), qaoa_backend="auto", output_dir=None):
+def _backend_label(backend):
+    if backend == "numpy":
+        return "numpy_reference"
+    if backend == "pyqpanda":
+        return "pyqpanda3.CPUQVM"
+    return str(backend)
+
+
+def _dense_distribution(distribution, n):
+    prob = np.zeros(1 << n, dtype=float)
+    for bitstring, probability in distribution.items():
+        prob[int(bitstring, 2)] = float(probability)
+    return prob
+
+
+def run_max3sat_benchmark(
+    *,
+    seeds=(0, 1, 2),
+    instances=None,
+    bfdcqo_backend="numpy",
+    qaoa_implementation="reference",
+    qaoa_backend="auto",
+    qaoa_shots=256,
+    qaoa_max_evals=20,
+    qaoa_final_shots=1024,
+    output_dir=None,
+):
     """Run native-HUBO BF-DCQO versus quadratized QAOA MAX-3-SAT benchmarks."""
+    if qaoa_implementation not in {"reference", "upstream"}:
+        raise ValueError(
+            "qaoa_implementation must be 'reference' or 'upstream'"
+        )
     if qaoa_backend == "auto":
         qaoa_backend = "pyqpanda" if pyqpanda3_backend.available() else "numpy"
+    benchmark_instances = (
+        tuple(default_max3sat_instances())
+        if instances is None
+        else tuple(instances)
+    )
+    bf_backend_label = _backend_label(bfdcqo_backend)
+    qaoa_backend_label = (
+        "pyqpanda_alg.QAOA.CPUQVM"
+        if qaoa_implementation == "upstream"
+        else qaoa_backend
+    )
     rows = []
     reductions = []
-    for app in default_max3sat_instances():
+    for app in benchmark_instances:
         native = app.to_native_ising()
         exact_native = ExactSolver().solve(native)
         opt_sat, opt_states = app.exact_solution()
@@ -164,7 +206,10 @@ def run_max3sat_benchmark(*, seeds=(0, 1, 2), qaoa_backend="auto", output_dir=No
 
         for seed in seeds:
             t0 = time.perf_counter()
-            bf_solver = BFDCQO(native, n_trotter=3, dt=0.1, iterations=6, shots=1024, seed=seed, backend="numpy")
+            bf_solver = BFDCQO(
+                native, n_trotter=3, dt=0.1, iterations=6,
+                shots=1024, seed=seed, backend=bfdcqo_backend,
+            )
             bf = bf_solver.solve()
             bf_time = time.perf_counter() - t0
             bf_last = bf.history[-1]
@@ -173,7 +218,7 @@ def run_max3sat_benchmark(*, seeds=(0, 1, 2), qaoa_backend="auto", output_dir=No
             rows.append({
                 "instance": app.name,
                 "solver": "BF-DCQO-native-HUBO",
-                "backend": "numpy_reference",
+                "backend": bf_backend_label,
                 "seed": seed,
                 "logical_n": app.n,
                 "solver_n": app.n,
@@ -184,7 +229,10 @@ def run_max3sat_benchmark(*, seeds=(0, 1, 2), qaoa_backend="auto", output_dir=No
                 "p_opt_logical": bf_last.ground_state_probability,
                 "expected_satisfied_weight": app.total_weight - bf_last.expected_energy,
                 "expected_approx_ratio": (app.total_weight - bf_last.expected_energy) / opt_sat if opt_sat > 0 else 1.0,
+                "formulation": "native-HUBO",
+                "target_shot_budget": 6144,
                 "total_shots": bf.total_shots,
+                "budget_delta": bf.total_shots - 6144,
                 "circuit_evaluations": bf.circuit_evaluations,
                 **bf_res,
                 "success": bool(np.isclose(bf_best_sat, opt_sat, atol=1e-9)),
@@ -192,22 +240,55 @@ def run_max3sat_benchmark(*, seeds=(0, 1, 2), qaoa_backend="auto", output_dir=No
             })
 
             t0 = time.perf_counter()
-            qsolver = QAOASolver(
-                qproblem, p=1, backend=qaoa_backend,
-                shots_per_eval=256, max_evals=20, final_shots=1024,
-                total_shot_budget=6144, seed=seed, method="COBYLA",
-            )
-            q = qsolver.solve()
+            if qaoa_implementation == "reference":
+                target_budget = (
+                    qaoa_max_evals * qaoa_shots + qaoa_final_shots
+                )
+                qsolver = QAOASolver(
+                    qproblem, p=1, backend=qaoa_backend,
+                    shots_per_eval=qaoa_shots, max_evals=qaoa_max_evals,
+                    final_shots=qaoa_final_shots,
+                    total_shot_budget=target_budget,
+                    seed=seed, method="COBYLA",
+                )
+                q = qsolver.solve()
+                qprob = qsolver.probabilities(q.parameters)
+                q_best_solution = q.best_solution
+                q_total_shots = q.total_shots
+                q_circuit_evaluations = q.circuit_evaluations
+                q_success = q.success
+                q_label = "QAOA-p1-reference"
+            else:
+                target_budget = qaoa_max_evals * qaoa_shots
+                q = UpstreamQAOASolver(
+                    qproblem, p=1, shots=qaoa_shots,
+                    max_evals=qaoa_max_evals,
+                    initial_parameter_seed=seed,
+                ).run()
+                qprob = _dense_distribution(q.distribution, qproblem.n)
+                q_best_solution = min(
+                    q.distribution,
+                    key=lambda bitstring: (
+                        qproblem.energy_bitstring(bitstring), bitstring
+                    ),
+                )
+                q_total_shots = q.total_shots
+                q_circuit_evaluations = q.circuit_evaluations
+                q_success = np.isclose(
+                    qproblem.energy_bitstring(q_best_solution),
+                    exact_q.best_energy,
+                    atol=1e-9,
+                )
+                q_label = "QAOA-p1-upstream"
             q_time = time.perf_counter() - t0
             q_res = _qaoa_resource_summary(qproblem, q, p=1)
-            qprob = qsolver.probabilities(q.parameters)
             lm = _logical_metrics_from_distribution(app, qprob, qproblem.n)
-            logical_best = q.best_solution[-app.n:]
+            logical_best = q_best_solution[-app.n:]
             q_best_sat = app.satisfied_weight_bitstring(logical_best)
             rows.append({
                 "instance": app.name,
-                "solver": "QAOA-p1-quadratized",
-                "backend": qaoa_backend,
+                "solver": q_label,
+                "backend": qaoa_backend_label,
                 "seed": seed,
                 "logical_n": app.n,
                 "solver_n": qproblem.n,
@@ -218,16 +299,22 @@ def run_max3sat_benchmark(*, seeds=(0, 1, 2), qaoa_backend="auto", output_dir=No
                 "p_opt_logical": lm["p_opt_logical"],
                 "expected_satisfied_weight": lm["expected_satisfied_weight"],
                 "expected_approx_ratio": lm["expected_approx_ratio"],
-                "total_shots": q.total_shots,
-                "circuit_evaluations": q.circuit_evaluations,
+                "formulation": "Rosenberg-quadratized-QUBO",
+                "target_shot_budget": target_budget,
+                "total_shots": q_total_shots,
+                "budget_delta": q_total_shots - target_budget,
+                "circuit_evaluations": q_circuit_evaluations,
                 **q_res,
-                "success": bool(np.isclose(q_best_sat, opt_sat, atol=1e-9)),
+                "success": bool(q_success and np.isclose(q_best_sat, opt_sat, atol=1e-9)),
                 "walltime_s": q_time,
             })
 
     summary = []
     for inst in sorted({r["instance"] for r in rows}):
-        for solver in ("BF-DCQO-native-HUBO", "QAOA-p1-quadratized"):
+        for solver in (
+            "BF-DCQO-native-HUBO",
+            f"QAOA-p1-{qaoa_implementation}",
+        ):
             rr = [r for r in rows if r["instance"] == inst and r["solver"] == solver]
             summary.append({
                 "instance": inst,
@@ -254,11 +341,22 @@ def run_max3sat_benchmark(*, seeds=(0, 1, 2), qaoa_backend="auto", output_dir=No
             })
 
     result = {
-        "qaoa_backend": qaoa_backend,
+        "config": {
+            "bfdcqo_backend": bf_backend_label,
+            "qaoa_implementation": qaoa_implementation,
+            "qaoa_backend": qaoa_backend_label,
+            "qaoa_shots": int(qaoa_shots),
+            "qaoa_max_evals": int(qaoa_max_evals),
+        },
+        "qaoa_backend": qaoa_backend_label,
         "pyqpanda3_available": pyqpanda3_backend.available(),
         "budget": {
             "bf": "6 iterations x 1024 shots = 6144",
-            "qaoa": "up to 20 objective evaluations x 256; remaining shots used for final sample; total=6144",
+            "qaoa": (
+                "observed CPUQVM circuit evaluations x shots"
+                if qaoa_implementation == "upstream"
+                else "objective evaluations x shots + final sample"
+            ),
         },
         "comparison": "native degree-3 HUBO BF-DCQO vs Rosenberg-quadratized QUBO p=1 QAOA",
         "reductions": reductions,

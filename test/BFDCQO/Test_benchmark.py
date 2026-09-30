@@ -46,6 +46,31 @@ def test_benchmark_equal_shot_budget(tmp_path):
         assert 0.0 <= row["p_opt"] <= 1.0 + 1e-12
 
 
+def test_maxcut_cpuqvm_benchmark_reports_observed_upstream_budget():
+    result = run_maxcut_benchmark(
+        seeds=(3,),
+        bfdcqo_backend="pyqpanda",
+        qaoa_implementation="upstream",
+        qaoa_shots=32,
+        qaoa_max_evals=2,
+    )
+    assert result["config"]["bfdcqo_backend"] == "pyqpanda3.CPUQVM"
+    assert result["config"]["qaoa_backend"] == "pyqpanda_alg.QAOA.CPUQVM"
+    assert {row["solver"] for row in result["rows"]} == {
+        "BF-DCQO", "QAOA-p1-upstream"
+    }
+    qaoa_rows = [
+        row for row in result["rows"]
+        if row["solver"] == "QAOA-p1-upstream"
+    ]
+    assert qaoa_rows
+    for row in qaoa_rows:
+        assert row["backend"] == "pyqpanda_alg.QAOA.CPUQVM"
+        assert row["target_shot_budget"] == 64
+        assert row["total_shots"] == row["circuit_evaluations"] * 32
+        assert row["budget_delta"] == row["total_shots"] - 64
+
+
 @pytest.mark.skipif(importlib.util.find_spec("pyqpanda3") is None, reason="pyqpanda3 not installed")
 def test_pyqpanda_qaoa_matches_numpy_exact_objective():
     app = MaxCutProblem.from_edges(4, [(0,1),(1,2),(2,3),(3,0)], name="cycle4")

@@ -60,12 +60,20 @@ def _metrics(spec, result):
     }
 
 
-def _make_solver(variant, problem, budget, seed, cvar_alpha):
+def _backend_label(backend):
+    if backend == "numpy":
+        return "numpy_reference"
+    if backend == "pyqpanda":
+        return "pyqpanda3.CPUQVM"
+    return str(backend)
+
+
+def _make_solver(variant, problem, budget, seed, cvar_alpha, backend):
     iterations = 6
     if budget % iterations != 0:
         raise ValueError("fixed-shot budgets must be divisible by six")
     fixed_shots = budget // iterations
-    common = dict(problem=problem, n_trotter=3, dt=0.1, backend="numpy", seed=seed)
+    common = dict(problem=problem, n_trotter=3, dt=0.1, backend=backend, seed=seed)
     if variant == "basic":
         return BFDCQO(**common, iterations=iterations, shots=fixed_shots)
     if variant == "cvar":
@@ -91,6 +99,7 @@ def run_family_benchmark(
     budgets=(1536, 3072, 6144),
     seeds=tuple(range(10)),
     cvar_alpha=0.10,
+    backend="numpy",
     output_dir=None,
 ):
     """Run matched-shot Basic/CVaR/Adaptive benchmarks on QUBO and HUBO cases."""
@@ -100,7 +109,10 @@ def run_family_benchmark(
             budget = int(budget)
             for seed in seeds:
                 for variant in ("basic", "cvar", "adaptive"):
-                    solver = _make_solver(variant, spec["problem"], budget, int(seed), cvar_alpha)
+                    solver = _make_solver(
+                        variant, spec["problem"], budget, int(seed),
+                        cvar_alpha, backend,
+                    )
                     t0 = time.perf_counter()
                     result = solver.solve()
                     elapsed = time.perf_counter() - t0
@@ -115,6 +127,7 @@ def run_family_benchmark(
                         "problem_kind": spec["kind"],
                         "degree": int(getattr(spec["problem"], "degree", 2)),
                         "variant": variant,
+                        "backend": _backend_label(backend),
                         "seed": int(seed),
                         "shot_budget": budget,
                         "total_shots": int(result.total_shots),
@@ -160,7 +173,7 @@ def run_family_benchmark(
             "fixed_iterations": 6,
             "n_trotter": 3,
             "dt": 0.1,
-            "backend": "numpy_reference",
+            "backend": _backend_label(backend),
             "note": "alpha=0.10 is used for this low-shot regression; enhanced BF-DCQO literature used alpha=0.01 with much larger shot counts.",
         },
         "rows": rows,
@@ -194,6 +207,7 @@ def run_adaptive_efficiency_benchmark(
     budget_caps=(1536, 3072, 6144),
     seeds=tuple(range(20)),
     cvar_alpha=0.10,
+    backend="numpy",
     output_dir=None,
 ):
     """Compare fixed-shot CVaR with adaptive-CVaR early stopping.
@@ -215,7 +229,7 @@ def run_adaptive_efficiency_benchmark(
                     "cvar_fixed": CVaRBFDCQO(
                         spec["problem"], n_trotter=3, dt=0.1,
                         iterations=6, shots=fixed, cvar_alpha=cvar_alpha,
-                        seed=int(seed), backend="numpy",
+                        seed=int(seed), backend=backend,
                     ),
                     "adaptive_cvar": AdaptiveShotBFDCQO(
                         spec["problem"], n_trotter=3, dt=0.1,
@@ -225,7 +239,7 @@ def run_adaptive_efficiency_benchmark(
                         cvar_alpha=cvar_alpha,
                         early_stop=True, min_iterations=2,
                         uncertainty_tol=0.30, bias_delta_tol=0.10,
-                        seed=int(seed), backend="numpy",
+                        seed=int(seed), backend=backend,
                     ),
                 }
                 for label, solver in solvers.items():
@@ -237,6 +251,7 @@ def run_adaptive_efficiency_benchmark(
                         "problem": spec["name"],
                         "problem_kind": spec["kind"],
                         "variant": label,
+                        "backend": _backend_label(backend),
                         "seed": int(seed),
                         "budget_cap": budget,
                         "total_shots": int(r.total_shots),
@@ -278,7 +293,7 @@ def run_adaptive_efficiency_benchmark(
             "seeds": [int(x) for x in seeds],
             "cvar_alpha": float(cvar_alpha),
             "adaptive_early_stop": {"uncertainty_tol": 0.30, "bias_delta_tol": 0.10, "min_iterations": 2},
-            "backend": "numpy_reference",
+            "backend": _backend_label(backend),
         },
         "rows": rows,
         "summary": summary,

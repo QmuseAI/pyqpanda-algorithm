@@ -83,6 +83,25 @@ def test_max3sat_benchmark_budget_and_reduction_metadata(tmp_path):
     assert (tmp_path / "max3sat_reduction_summary.csv").exists()
 
 
+def test_max3sat_upstream_qaoa_uses_quadratized_cpuqvm_problem():
+    app = default_max3sat_instances()[0]
+    result = run_max3sat_benchmark(
+        instances=(app,), seeds=(0,),
+        bfdcqo_backend="pyqpanda",
+        qaoa_implementation="upstream",
+        qaoa_shots=32,
+        qaoa_max_evals=2,
+    )
+    assert len(result["rows"]) == 2
+    qaoa = next(row for row in result["rows"] if row["solver"] == "QAOA-p1-upstream")
+    assert qaoa["backend"] == "pyqpanda_alg.QAOA.CPUQVM"
+    assert qaoa["formulation"] == "Rosenberg-quadratized-QUBO"
+    assert qaoa["solver_n"] > qaoa["logical_n"]
+    assert qaoa["target_shot_budget"] == 64
+    assert qaoa["total_shots"] > 0
+    assert qaoa["budget_delta"] == qaoa["total_shots"] - 64
+
+
 @pytest.mark.skipif(importlib.util.find_spec("pyqpanda3") is None, reason="pyqpanda3 not installed")
 def test_quadratized_qaoa_pyqpanda_matches_numpy_distribution():
     app = default_max3sat_instances()[0]

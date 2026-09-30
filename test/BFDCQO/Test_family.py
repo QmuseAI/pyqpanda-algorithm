@@ -106,6 +106,27 @@ def test_family_benchmark_has_strict_matched_budgets_and_both_problem_types(tmp_
     assert (tmp_path / "family_summary.csv").exists()
 
 
+@pytest.mark.skipif(importlib.util.find_spec("pyqpanda3") is None, reason="pyqpanda3 not installed")
+def test_family_benchmarks_report_real_cpuqvm_backend():
+    matched = run_family_benchmark(
+        budgets=(192,), seeds=(0,), cvar_alpha=0.10,
+        backend="pyqpanda",
+    )
+    assert matched["config"]["backend"] == "pyqpanda3.CPUQVM"
+    assert {row["backend"] for row in matched["rows"]} == {
+        "pyqpanda3.CPUQVM"
+    }
+
+    adaptive = run_adaptive_efficiency_benchmark(
+        budget_caps=(192,), seeds=(0,), cvar_alpha=0.10,
+        backend="pyqpanda",
+    )
+    assert adaptive["config"]["backend"] == "pyqpanda3.CPUQVM"
+    assert {row["backend"] for row in adaptive["rows"]} == {
+        "pyqpanda3.CPUQVM"
+    }
+
+
 def test_cvar_degenerate_threshold_is_basis_order_invariant():
     # alpha=0.5 cuts through a degenerate E=0 group. The two states must be
     # retained proportionally (80/20), not by basis index.

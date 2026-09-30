@@ -95,7 +95,7 @@ def test_mwis_benchmark_budget_and_solver_matrix(tmp_path):
     )
     assert len(out["rows"]) == 3 * 1 * 4
     assert {r["solver"] for r in out["rows"]} == {
-        "BF-basic", "Hybrid-random", "Hybrid-confidence", "QAOA-p1"
+        "BF-basic", "Hybrid-random", "Hybrid-confidence", "QAOA-p1-reference"
     }
     for r in out["rows"]:
         assert r["total_shots"] == 72
@@ -106,6 +106,27 @@ def test_mwis_benchmark_budget_and_solver_matrix(tmp_path):
             assert r["local_evaluations"] == 0
     assert (tmp_path / "mwis_hybrid_benchmark.json").exists()
     assert (tmp_path / "mwis_hybrid_summary.csv").exists()
+
+
+def test_mwis_upstream_qaoa_cpuqvm_smoke_reports_observed_budget():
+    app = default_mwis_instances()[0]
+    result = run_mwis_hybrid_benchmark(
+        instances=(app,), seeds=(0,), quantum_budget=96,
+        local_neighborhood_size=4, local_rounds=1,
+        bfdcqo_backend="pyqpanda",
+        qaoa_implementation="upstream",
+    )
+    assert len(result["rows"]) == 4
+    assert {
+        row["backend"] for row in result["rows"]
+        if row["solver"] != "QAOA-p1-upstream"
+    } == {"pyqpanda3.CPUQVM"}
+    qaoa = next(row for row in result["rows"] if row["solver"] == "QAOA-p1-upstream")
+    assert qaoa["backend"] == "pyqpanda_alg.QAOA.CPUQVM"
+    assert qaoa["total_shots"] > 0
+    assert qaoa["budget_delta"] == (
+        qaoa["total_shots"] - qaoa["target_shot_budget"]
+    )
 
 
 @pytest.mark.skipif(importlib.util.find_spec("pyqpanda3") is None, reason="pyqpanda3 not installed")

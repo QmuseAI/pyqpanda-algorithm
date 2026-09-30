@@ -12,6 +12,7 @@ import numpy as np
 from ..applications.mwis import MWISProblem
 from ..solvers import ExactSolver, BFDCQO, HybridBFDCQO, QAOASolver
 from ..backends import pyqpanda3_backend
+from .upstream_qaoa import UpstreamQAOASolver
 
 
 def default_mwis_instances() -> list[MWISProblem]:
@@ -51,12 +52,23 @@ def _mwis_metrics(app: MWISProblem, bitstring: str, opt_weight: float) -> dict:
     }
 
 
+def _backend_label(backend):
+    if backend == "numpy":
+        return "numpy_reference"
+    if backend == "pyqpanda":
+        return "pyqpanda3.CPUQVM"
+    return str(backend)
+
+
 def run_mwis_hybrid_benchmark(
     *,
     seeds=tuple(range(10)),
+    instances=None,
     quantum_budget: int = 72,
     local_neighborhood_size: int = 4,
     local_rounds: int = 1,
+    bfdcqo_backend: str = "numpy",
+    qaoa_implementation: str = "reference",
     qaoa_backend: str = "auto",
     output_dir=None,
 ):
@@ -67,11 +79,17 @@ def run_mwis_hybrid_benchmark(
     optimum sampling.  With the default budget:
 
       BF:   3 iterations x 24 shots = 72
-      QAOA: 4 objective evaluations x 12 shots + 24 final shots = 72
+      Reference QAOA: 4 objective evaluations x 12 shots + 24 final
+      shots = 72. The upstream path instead reports its observed CPUQVM
+      circuit count and may differ from the requested training budget.
 
     Both hybrid variants use the *same* BF quantum stage and exactly
     ``2**local_neighborhood_size * local_rounds`` classical energy evaluations.
     """
+    if qaoa_implementation not in {"reference", "upstream"}:
+        raise ValueError(
+            "qaoa_implementation must be 'reference' or 'upstream'"
+        )
     quantum_budget = int(quantum_budget)
     if quantum_budget % 3 != 0:
         raise ValueError("quantum_budget must be divisible by 3 for the fixed BF schedule")
@@ -85,9 +103,20 @@ def run_mwis_hybrid_benchmark(
     q_shots_eval = train_budget // 4
     if qaoa_backend == "auto":
         qaoa_backend = "pyqpanda" if pyqpanda3_backend.available() else "numpy"
+    benchmark_instances = (
+        tuple(default_mwis_instances())
+        if instances is None
+        else tuple(instances)
+    )
+    bf_backend_label = _backend_label(bfdcqo_backend)
+    qaoa_backend_label = (
+        "pyqpanda_alg.QAOA.CPUQVM"
+        if qaoa_implementation == "upstream"
+        else qaoa_backend
+    )
 
     rows = []
-    for app in default_mwis_instances():
+    for app in benchmark_instances:
         problem = app.to_ising()
         exact = ExactSolver().solve(problem)
         opt_weight, opt_states = app.exact_mwis()
@@ -100,16 +129,19 @@ def run_mwis_hybrid_benchmark(
             t0 = time.perf_counter()
             bf = BFDCQO(
                 problem, n_trotter=2, dt=0.1,
-                iterations=3, shots=bf_shots, seed=seed, backend="numpy",
+                iterations=3, shots=bf_shots, seed=seed,
+                backend=bfdcqo_backend,
             ).solve()
             bf_t = time.perf_counter() - t0
             met = _mwis_metrics(app, bf.best_solution, opt_weight)
             rows.append({
                 "instance": app.name, "n": app.n, "edges": len(app.edges),
-                "solver": "BF-basic", "backend": "numpy_reference", "seed": seed,
+                "solver": "BF-basic", "backend": bf_backend_label, "seed": seed,
                 "opt_weight": opt_weight, **met,
                 "p_opt": float(bf.history[-1].ground_state_probability),
                 "total_shots": int(bf.total_shots),
+                "target_shot_budget": quantum_budget,
+                "budget_delta": int(bf.total_shots - quantum_budget),
                 "circuit_evaluations": int(bf.circuit_evaluations),
                 "local_evaluations": 0, "local_improvement_energy": 0.0,
                 "success": bool(bf.success), "walltime_s": float(bf_t),
@@ -121,16 +153,19 @@ def run_mwis_hybrid_benchmark(
                 problem, base_variant="basic", local_method="random",
                 neighborhood_size=local_neighborhood_size, local_rounds=local_rounds,
                 local_seed=seed + 321, n_trotter=2, dt=0.1,
-                max_iterations=3, shots=bf_shots, seed=seed, backend="numpy",
+                max_iterations=3, shots=bf_shots, seed=seed,
+                backend=bfdcqo_backend,
             ).solve()
             hr_t = time.perf_counter() - t0
             met = _mwis_metrics(app, hr.best_solution, opt_weight)
             rows.append({
                 "instance": app.name, "n": app.n, "edges": len(app.edges),
-                "solver": "Hybrid-random", "backend": "numpy_reference", "seed": seed,
+                "solver": "Hybrid-random", "backend": bf_backend_label, "seed": seed,
                 "opt_weight": opt_weight, **met,
                 "p_opt": float(hr.quantum_result.history[-1].ground_state_probability),
                 "total_shots": int(hr.total_shots),
+                "target_shot_budget": quantum_budget,
+                "budget_delta": int(hr.total_shots - quantum_budget),
                 "circuit_evaluations": int(hr.circuit_evaluations),
                 "local_evaluations": int(hr.local_evaluations),
                 "local_improvement_energy": float(hr.local_improvement),
@@ -143,46 +178,84 @@ def run_mwis_hybrid_benchmark(
                 problem, base_variant="basic", local_method="confidence",
                 neighborhood_size=local_neighborhood_size, local_rounds=local_rounds,
                 n_trotter=2, dt=0.1,
-                max_iterations=3, shots=bf_shots, seed=seed, backend="numpy",
+                max_iterations=3, shots=bf_shots, seed=seed,
+                backend=bfdcqo_backend,
             ).solve()
             hc_t = time.perf_counter() - t0
             met = _mwis_metrics(app, hc.best_solution, opt_weight)
             rows.append({
                 "instance": app.name, "n": app.n, "edges": len(app.edges),
-                "solver": "Hybrid-confidence", "backend": "numpy_reference", "seed": seed,
+                "solver": "Hybrid-confidence", "backend": bf_backend_label, "seed": seed,
                 "opt_weight": opt_weight, **met,
                 "p_opt": float(hc.quantum_result.history[-1].ground_state_probability),
                 "total_shots": int(hc.total_shots),
+                "target_shot_budget": quantum_budget,
+                "budget_delta": int(hc.total_shots - quantum_budget),
                 "circuit_evaluations": int(hc.circuit_evaluations),
                 "local_evaluations": int(hc.local_evaluations),
                 "local_improvement_energy": float(hc.local_improvement),
                 "success": bool(hc.success), "walltime_s": float(hc_t),
             })
 
-            # PyQPanda QAOA baseline (NumPy reference in this delivery environment).
+            # Selectable local-reference or public upstream QAOA baseline.
             t0 = time.perf_counter()
-            q = QAOASolver(
-                problem, p=1, backend=qaoa_backend,
-                shots_per_eval=q_shots_eval, max_evals=4,
-                final_shots=q_final, total_shot_budget=quantum_budget,
-                seed=seed, method="COBYLA",
-            ).solve()
+            if qaoa_implementation == "reference":
+                q = QAOASolver(
+                    problem, p=1, backend=qaoa_backend,
+                    shots_per_eval=q_shots_eval, max_evals=4,
+                    final_shots=q_final, total_shot_budget=quantum_budget,
+                    seed=seed, method="COBYLA",
+                ).solve()
+                q_best_solution = q.best_solution
+                q_p_opt = q.ground_state_probability
+                q_total_shots = q.total_shots
+                q_circuit_evaluations = q.circuit_evaluations
+                q_success = q.success
+                q_target_budget = quantum_budget
+                q_label = "QAOA-p1-reference"
+            else:
+                q = UpstreamQAOASolver(
+                    problem, p=1, shots=q_shots_eval, max_evals=4,
+                    initial_parameter_seed=seed,
+                ).run()
+                q_best_solution = min(
+                    q.distribution,
+                    key=lambda bitstring: (
+                        problem.energy_bitstring(bitstring), bitstring
+                    ),
+                )
+                ground_states = set(exact.best_solutions)
+                q_p_opt = float(sum(
+                    probability
+                    for bitstring, probability in q.distribution.items()
+                    if bitstring in ground_states
+                ))
+                q_total_shots = q.total_shots
+                q_circuit_evaluations = q.circuit_evaluations
+                q_success = q_best_solution in ground_states
+                q_target_budget = 4 * q_shots_eval
+                q_label = "QAOA-p1-upstream"
             q_t = time.perf_counter() - t0
-            met = _mwis_metrics(app, q.best_solution, opt_weight)
+            met = _mwis_metrics(app, q_best_solution, opt_weight)
             rows.append({
                 "instance": app.name, "n": app.n, "edges": len(app.edges),
-                "solver": "QAOA-p1", "backend": qaoa_backend, "seed": seed,
+                "solver": q_label, "backend": qaoa_backend_label, "seed": seed,
                 "opt_weight": opt_weight, **met,
-                "p_opt": float(q.ground_state_probability),
-                "total_shots": int(q.total_shots),
-                "circuit_evaluations": int(q.circuit_evaluations),
+                "p_opt": float(q_p_opt),
+                "total_shots": int(q_total_shots),
+                "target_shot_budget": int(q_target_budget),
+                "budget_delta": int(q_total_shots - q_target_budget),
+                "circuit_evaluations": int(q_circuit_evaluations),
                 "local_evaluations": 0, "local_improvement_energy": 0.0,
-                "success": bool(q.success), "walltime_s": float(q_t),
+                "success": bool(q_success), "walltime_s": float(q_t),
             })
 
     summary = []
-    solver_order = ("BF-basic", "Hybrid-random", "Hybrid-confidence", "QAOA-p1")
-    for instance in [x.name for x in default_mwis_instances()]:
+    solver_order = (
+        "BF-basic", "Hybrid-random", "Hybrid-confidence",
+        f"QAOA-p1-{qaoa_implementation}",
+    )
+    for instance in [x.name for x in benchmark_instances]:
         for solver in solver_order:
             rr = [r for r in rows if r["instance"] == instance and r["solver"] == solver]
             summary.append({
@@ -206,9 +279,23 @@ def run_mwis_hybrid_benchmark(
             "seeds": [int(s) for s in seeds],
             "quantum_budget": quantum_budget,
             "bf": {"iterations": 3, "shots_per_iteration": bf_shots, "n_trotter": 2},
-            "qaoa": {"p": 1, "objective_evaluations_cap": 4, "shots_per_eval": q_shots_eval, "final_shots": q_final},
+            "qaoa": {
+                "p": 1,
+                "objective_evaluations_cap": 4,
+                "shots_per_eval": q_shots_eval,
+                "final_shots": (
+                    q_final if qaoa_implementation == "reference" else None
+                ),
+                "target_shot_budget": (
+                    quantum_budget
+                    if qaoa_implementation == "reference"
+                    else 4 * q_shots_eval
+                ),
+            },
             "local": {"neighborhood_size": int(local_neighborhood_size), "rounds": int(local_rounds), "evaluations_per_run": int((2 ** min(local_neighborhood_size, 8)) * local_rounds)},
-            "qaoa_backend": qaoa_backend,
+            "bfdcqo_backend": bf_backend_label,
+            "qaoa_implementation": qaoa_implementation,
+            "qaoa_backend": qaoa_backend_label,
             "pyqpanda3_available": pyqpanda3_backend.available(),
         },
         "rows": rows,
