@@ -19,7 +19,7 @@ from pathlib import Path
 import platform
 import subprocess
 import sys
-from typing import Iterable, Mapping
+from typing import Any, Iterable, Mapping
 
 # This repository script must prefer the adjacent checkout over any installed
 # pyqpanda_alg copy, regardless of the caller's cwd or PYTHONPATH.
@@ -38,7 +38,7 @@ from pyqpanda_alg.BFDCQO.benchmark import (
 from pyqpanda_alg.BFDCQO.benchmark.instances import default_maxcut_instances
 
 
-QUICK = {
+QUICK: dict[str, Any] = {
     "seeds": (0,),
     "family_budgets": (1536,),
     "maxcut_qaoa_shots": 256,
@@ -48,7 +48,7 @@ QUICK = {
     "mwis_instance_count": 1,
 }
 
-OFFICIAL = {
+OFFICIAL: dict[str, Any] = {
     "seeds": (0, 1, 2),
     "family_budgets": (1536, 3072, 6144),
     "maxcut_qaoa_shots": 256,
@@ -95,7 +95,7 @@ def _package_version(package_root: Path) -> str:
     raise RuntimeError(f"version not found in {setup_path}")
 
 
-def _git_provenance(repository: Path) -> dict[str, object]:
+def _git_provenance(repository: Path) -> dict[str, Any]:
     relative_driver = Path(__file__).resolve().relative_to(repository).as_posix()
     driver_bytes = Path(__file__).read_bytes()
     working_blob = _git_output(repository, "hash-object", relative_driver)
@@ -128,7 +128,7 @@ def _csv_value(value: object) -> object:
     return value
 
 
-def _write_csv(path: Path, rows: list[dict[str, object]]) -> None:
+def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     if not rows:
         raise RuntimeError(f"cannot write empty benchmark table: {path.name}")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -152,15 +152,15 @@ def _population_std(values: Iterable[float]) -> float:
 
 
 def _matching_rows(
-    rows: list[dict[str, object]], summary: Mapping[str, object], keys: tuple[str, ...]
-) -> list[dict[str, object]]:
+    rows: list[dict[str, Any]], summary: Mapping[str, Any], keys: tuple[str, ...]
+) -> list[dict[str, Any]]:
     return [
         row for row in rows
         if all(row[key] == summary[key] for key in keys)
     ]
 
 
-def _execution_model(row: Mapping[str, object]) -> str:
+def _execution_model(row: Mapping[str, Any]) -> str:
     return (
         QAOA_EXECUTION_MODEL
         if str(row.get("solver", "")).startswith("QAOA")
@@ -169,9 +169,9 @@ def _execution_model(row: Mapping[str, object]) -> str:
 
 
 def _enrich_summary(
-    payload: dict[str, object], *, keys: tuple[str, ...], metric: str,
+    payload: dict[str, Any], *, keys: tuple[str, ...], metric: str,
     target_key: str = "target_shot_budget",
-) -> list[dict[str, object]]:
+) -> list[dict[str, Any]]:
     rows = payload["rows"]
     result = []
     for original in payload["summary"]:
@@ -197,7 +197,7 @@ def _enrich_summary(
     return result
 
 
-def _family_summary(payload: dict[str, object]) -> list[dict[str, object]]:
+def _family_summary(payload: dict[str, Any]) -> list[dict[str, Any]]:
     rows = payload["rows"]
     result = []
     for original in payload["summary"]:
@@ -221,7 +221,7 @@ def _family_summary(payload: dict[str, object]) -> list[dict[str, object]]:
     return result
 
 
-def _metadata(repository: Path, config: Mapping[str, object], quick: bool) -> dict[str, object]:
+def _metadata(repository: Path, config: Mapping[str, Any], quick: bool) -> dict[str, Any]:
     provenance = _git_provenance(repository)
     return {
         "mode": "quick" if quick else "official",
@@ -270,7 +270,7 @@ def _metadata(repository: Path, config: Mapping[str, object], quick: bool) -> di
     }
 
 
-def run_suite(output_dir: Path, *, quick: bool) -> dict[str, object]:
+def run_suite(output_dir: Path, *, quick: bool) -> dict[str, Any]:
     """Run quick or official CPUQVM evidence and write raw + aggregate files."""
     repository = REPOSITORY_ROOT
     output_dir = Path(output_dir).resolve()
@@ -354,7 +354,7 @@ def _range_text(values: Iterable[float], digits: int = 0) -> str:
     return low if low == high else f"{low}–{high}"
 
 
-def _write_figures(result: dict[str, object], docs_dir: Path) -> None:
+def _write_figures(result: dict[str, Any], docs_dir: Path) -> None:
     import matplotlib
 
     matplotlib.use("Agg")
@@ -415,7 +415,7 @@ def _write_figures(result: dict[str, object], docs_dir: Path) -> None:
     plt.close(fig)
 
 
-def _write_report(result: dict[str, object], docs_dir: Path) -> None:
+def _write_report(result: dict[str, Any], docs_dir: Path) -> None:
     metadata = result["metadata"]
     payloads = result["payloads"]
     maxcut_q = [
@@ -446,7 +446,7 @@ def _write_report(result: dict[str, object], docs_dir: Path) -> None:
         for row in mwis_summary if row["solver"] == "Hybrid-confidence"
     )
 
-    def budget_line(label: str, rows: list[dict[str, object]]) -> str:
+    def budget_line(label: str, rows: list[dict[str, Any]]) -> str:
         return (
             f"- {label}：实际 circuit evaluations "
             f"{_range_text(row['circuit_evaluations'] for row in rows)}，总 shots "
@@ -497,7 +497,7 @@ MWIS 等成本消融中，随机分块 Hybrid 的跨实例平均 best-weight rat
     (docs_dir / "BENCHMARK_REPORT.md").write_text(report, encoding="utf-8")
 
 
-def write_curated_evidence(result: dict[str, object], docs_dir: Path) -> None:
+def write_curated_evidence(result: dict[str, Any], docs_dir: Path) -> None:
     """Write only aggregated tables, two figures, and the Chinese report."""
     docs_dir = Path(docs_dir).resolve()
     tables = docs_dir / "tables"

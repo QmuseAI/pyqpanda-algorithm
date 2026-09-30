@@ -1,0 +1,3 @@
+.gitignore text eol=lf
+docs/bfdcqo/*.md text eol=lf
+docs/bfdcqo/tables/*.csv text eol=lf

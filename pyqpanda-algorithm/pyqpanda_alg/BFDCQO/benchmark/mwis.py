@@ -7,6 +7,7 @@ import csv
 import json
 import time
 from pathlib import Path
+from typing import Literal
 import numpy as np
 
 from ..applications.mwis import MWISProblem
@@ -68,9 +69,9 @@ def run_mwis_hybrid_benchmark(
     quantum_budget: int = 72,
     local_neighborhood_size: int = 4,
     local_rounds: int = 1,
-    bfdcqo_backend: str = "numpy",
+    bfdcqo_backend: Literal["numpy", "pyqpanda"] = "numpy",
     qaoa_implementation: str = "reference",
-    qaoa_backend: str = "auto",
+    qaoa_backend: Literal["auto", "numpy", "pyqpanda"] = "auto",
     output_dir=None,
 ):
     """Low-shot MWIS benchmark for Exact, QAOA, Basic BF and Hybrid BF.
@@ -215,12 +216,12 @@ def run_mwis_hybrid_benchmark(
                 q_target_budget = quantum_budget
                 q_label = "QAOA-p1-reference"
             else:
-                q = UpstreamQAOASolver(
+                q_upstream = UpstreamQAOASolver(
                     problem, p=1, shots=q_shots_eval, max_evals=4,
                     initial_parameter_seed=seed,
                 ).run()
                 q_best_solution = min(
-                    q.distribution,
+                    q_upstream.distribution,
                     key=lambda bitstring: (
                         problem.energy_bitstring(bitstring), bitstring
                     ),
@@ -228,11 +229,11 @@ def run_mwis_hybrid_benchmark(
                 ground_states = set(exact.best_solutions)
                 q_p_opt = float(sum(
                     probability
-                    for bitstring, probability in q.distribution.items()
+                    for bitstring, probability in q_upstream.distribution.items()
                     if bitstring in ground_states
                 ))
-                q_total_shots = q.total_shots
-                q_circuit_evaluations = q.circuit_evaluations
+                q_total_shots = q_upstream.total_shots
+                q_circuit_evaluations = q_upstream.circuit_evaluations
                 q_success = q_best_solution in ground_states
                 q_target_budget = (4 + 2) * q_shots_eval
                 q_label = "QAOA-p1-upstream"

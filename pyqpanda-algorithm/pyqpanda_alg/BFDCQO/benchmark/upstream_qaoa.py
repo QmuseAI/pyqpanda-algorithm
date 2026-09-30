@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from numbers import Integral
-from typing import Optional
+from typing import Any, Optional
 import warnings
 
 import numpy as np
@@ -141,19 +141,19 @@ class UpstreamQAOASolver:
                 "initial_parameter_seed must be an integer in [0, 2**32)"
             )
 
-        self.model = model
-        self.p = int(p)
-        self.shots = int(shots)
-        self.max_evals = int(max_evals)
-        self.initial_parameter_seed = (
+        self.model: IsingProblem = model
+        self.p: int = int(p)
+        self.shots: int = int(shots)
+        self.max_evals: int = int(max_evals)
+        self.initial_parameter_seed: Optional[int] = (
             None
             if initial_parameter_seed is None
             else int(initial_parameter_seed)
         )
-        self._qaoa_instance: Optional[upstream_qaoa.QAOA] = None
+        self._qaoa_instance: Optional[Any] = None
 
     @property
-    def qaoa_instance(self) -> upstream_qaoa.QAOA:
+    def qaoa_instance(self) -> Any:
         """Return the concrete upstream instance after :meth:`run`."""
 
         if self._qaoa_instance is None:
@@ -164,12 +164,13 @@ class UpstreamQAOASolver:
         """Optimize and sample using upstream QAOA and a PyQPanda3 CPUQVM."""
 
         expression = ising_to_sympy(self.model)
-        engine = upstream_qaoa.QAOA(expression)
+        engine: Any = upstream_qaoa.QAOA(expression)
         self._qaoa_instance = engine
 
-        initial_parameters = (
+        initial_parameters: np.ndarray = np.asarray(
             np.random.default_rng(self.initial_parameter_seed).random(self.p * 2)
-            * np.pi
+            * np.pi,
+            dtype=float,
         )
         distribution, parameters, loss = engine.run(
             layer=self.p,

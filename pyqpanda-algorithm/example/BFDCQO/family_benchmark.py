@@ -12,12 +12,21 @@ def main():
     ap.add_argument("--seeds", type=int, default=10, help="number of seeds starting at zero")
     ap.add_argument("--cvar-alpha", type=float, default=0.10)
     ap.add_argument("--budgets", default="1536,3072,6144")
+    ap.add_argument("--backend", choices=["numpy", "pyqpanda"], default="numpy")
+    ap.add_argument(
+        "--quick", action="store_true",
+        help="run one seed and the smallest budget as a smoke test",
+    )
     args = ap.parse_args()
     budgets = tuple(int(x) for x in args.budgets.split(",") if x.strip())
+    if args.quick:
+        budgets = budgets[:1]
+        args.seeds = 1
     result = run_family_benchmark(
         budgets=budgets,
         seeds=tuple(range(args.seeds)),
         cvar_alpha=args.cvar_alpha,
+        backend=args.backend,
         output_dir=args.output_dir,
     )
     print("BF-DCQO family benchmark")
