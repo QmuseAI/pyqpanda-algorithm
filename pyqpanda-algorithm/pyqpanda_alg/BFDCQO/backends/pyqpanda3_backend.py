@@ -39,7 +39,7 @@ def pauli_rotation_recipe(pauli_string, theta: float):
     if not active or abs(theta) < 1e-16:
         return []
 
-    operations = []
+    operations: list[tuple[str, int] | tuple[str, int, float]] = []
     for qubit in active:
         pauli = pauli_string[qubit]
         if pauli == "X":

@@ -134,7 +134,7 @@ print(result.best_solution, result.best_energy)
 
 - Basic BF-DCQO 的核心协议归于 A. Gomez Cadavid 等人的工作。
 - native HUBO、CVaR BF-DCQO 与 MAX-3-SAT 构造归于 S. V. Romero 等人的工作。
-- MWIS 是既有组合优化应用，本项目仅将其作为 QUBO 验证问题，不主张其为新的 BF-DCQO 应用。
+- MWIS 已经是 A. Gomez Cadavid 等人原始 BF-DCQO 工作中的应用；本项目仅将其作为 QUBO 验证问题，不主张首次将 BF-DCQO 应用于 MWIS。
 - 经典 refinement 的先行概念可参见 Hybrid Sequential Quantum Computing（HSQC）；本实现提供的是受预算、可记录评估次数的工程化对照路径。
 
 参考文献：

@@ -66,7 +66,7 @@ def clean(op: PauliOp, tol: float = 1e-13) -> PauliOp:
 
 def add(a: PauliOp, b: PauliOp, scale_b: complex = 1.0) -> PauliOp:
     """Return ``a + scale_b * b`` in sparse Pauli representation."""
-    out = defaultdict(complex)
+    out: defaultdict[PauliString, complex] = defaultdict(complex)
     for p, c in a.items(): out[p] += c
     for p, c in b.items(): out[p] += scale_b * c
     return clean(dict(out))
@@ -91,7 +91,7 @@ def multiply_strings(a: PauliString, b: PauliString) -> tuple[complex, PauliStri
 
 def multiply(a: PauliOp, b: PauliOp) -> PauliOp:
     """Multiply two sparse Pauli operators exactly."""
-    out = defaultdict(complex)
+    out: defaultdict[PauliString, complex] = defaultdict(complex)
     for pa, ca in a.items():
         for pb, cb in b.items():
             ph, p = multiply_strings(pa, pb)
