@@ -9,14 +9,23 @@ Chinese report; it deliberately excludes raw per-run records.
 from __future__ import annotations
 
 import argparse
+import ast
 import csv
 from datetime import datetime, timezone
+import hashlib
 import importlib.metadata
 import json
 from pathlib import Path
 import platform
 import subprocess
+import sys
 from typing import Iterable, Mapping
+
+# This repository script must prefer the adjacent checkout over any installed
+# pyqpanda_alg copy, regardless of the caller's cwd or PYTHONPATH.
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+PACKAGE_ROOT = REPOSITORY_ROOT / "pyqpanda-algorithm"
+sys.path.insert(0, str(PACKAGE_ROOT))
 
 from pyqpanda_alg.BFDCQO.benchmark import (
     default_max3sat_instances,
@@ -52,17 +61,65 @@ OFFICIAL = {
 
 BF_BACKEND = "pyqpanda3.CPUQVM"
 QAOA_BACKEND = "pyqpanda_alg.QAOA.CPUQVM"
+BF_EXECUTION_MODEL = (
+    "PyQPanda3 CPUQVM ideal probabilities + seeded NumPy multinomial "
+    "feedback sampling"
+)
+QAOA_EXECUTION_MODEL = "pyqpanda_alg.QAOA.CPUQVM shot execution"
 
 
-def _git_commit(repository: Path) -> str:
+def _git_output(repository: Path, *arguments: str) -> str:
     completed = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
+        ["git", *arguments],
         cwd=repository,
         check=True,
         capture_output=True,
         text=True,
     )
     return completed.stdout.strip()
+
+
+def _package_version(package_root: Path) -> str:
+    """Read the checkout version without executing setup.py."""
+    setup_path = package_root / "setup.py"
+    module = ast.parse(setup_path.read_text(encoding="utf-8-sig"))
+    for node in ast.walk(module):
+        if not isinstance(node, ast.Call):
+            continue
+        if not isinstance(node.func, ast.Name) or node.func.id != "setup":
+            continue
+        for keyword in node.keywords:
+            if keyword.arg == "version" and isinstance(keyword.value, ast.Constant):
+                if isinstance(keyword.value.value, str):
+                    return keyword.value.value
+    raise RuntimeError(f"version not found in {setup_path}")
+
+
+def _git_provenance(repository: Path) -> dict[str, object]:
+    relative_driver = Path(__file__).resolve().relative_to(repository).as_posix()
+    driver_bytes = Path(__file__).read_bytes()
+    working_blob = _git_output(repository, "hash-object", relative_driver)
+    try:
+        head_blob = _git_output(
+            repository, "rev-parse", f"HEAD:{relative_driver}"
+        )
+    except subprocess.CalledProcessError:
+        head_blob = None
+    status = _git_output(repository, "status", "--porcelain")
+    return {
+        "git_commit": _git_output(repository, "rev-parse", "HEAD"),
+        "git_tree": _git_output(repository, "rev-parse", "HEAD^{tree}"),
+        "git_dirty": bool(status),
+        "driver_path": relative_driver,
+        "driver_sha256": hashlib.sha256(driver_bytes).hexdigest(),
+        "driver_git_blob": working_blob,
+        "driver_head_blob": head_blob,
+        "driver_matches_head": head_blob == working_blob,
+        "revision_note": (
+            "git_commit/git_tree identify HEAD; git_dirty and "
+            "driver_matches_head describe the executed working tree"
+        ),
+    }
 
 
 def _csv_value(value: object) -> object:
@@ -103,6 +160,14 @@ def _matching_rows(
     ]
 
 
+def _execution_model(row: Mapping[str, object]) -> str:
+    return (
+        QAOA_EXECUTION_MODEL
+        if str(row.get("solver", "")).startswith("QAOA")
+        else BF_EXECUTION_MODEL
+    )
+
+
 def _enrich_summary(
     payload: dict[str, object], *, keys: tuple[str, ...], metric: str,
     target_key: str = "target_shot_budget",
@@ -122,6 +187,7 @@ def _enrich_summary(
         result.append({
             **original,
             "backend": selected[0]["backend"],
+            "execution_model": _execution_model(selected[0]),
             "seed_count": len({int(row["seed"]) for row in selected}),
             f"std_{metric}": _population_std(float(row[metric]) for row in selected),
             "mean_target_shot_budget": _mean(target_values),
@@ -141,6 +207,7 @@ def _family_summary(payload: dict[str, object]) -> list[dict[str, object]]:
         result.append({
             **original,
             "backend": selected[0]["backend"],
+            "execution_model": BF_EXECUTION_MODEL,
             "seed_count": len({int(row["seed"]) for row in selected}),
             "mean_target_shot_budget": float(original["shot_budget"]),
             "mean_observed_total_shots": _mean(
@@ -155,13 +222,18 @@ def _family_summary(payload: dict[str, object]) -> list[dict[str, object]]:
 
 
 def _metadata(repository: Path, config: Mapping[str, object], quick: bool) -> dict[str, object]:
+    provenance = _git_provenance(repository)
     return {
         "mode": "quick" if quick else "official",
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "python_version": platform.python_version(),
         "pyqpanda3_version": importlib.metadata.version("pyqpanda3"),
-        "package_version": "2.0.0",
-        "git_commit": _git_commit(repository),
+        "package_version": _package_version(PACKAGE_ROOT),
+        "dependency_versions": {
+            name: importlib.metadata.version(name)
+            for name in ("numpy", "scipy", "sympy", "matplotlib")
+        },
+        **provenance,
         "seeds": list(config["seeds"]),
         "configuration": {
             key: list(value) if isinstance(value, tuple) else value
@@ -174,20 +246,33 @@ def _metadata(repository: Path, config: Mapping[str, object], quick: bool) -> di
             "mwis": int(config["mwis_instance_count"]),
         },
         "backends": {"bfdcqo": BF_BACKEND, "qaoa": QAOA_BACKEND},
-        "initial_parameter_seed_scope": (
-            "initial_parameter_seed controls optimizer initialization only"
-        ),
-        "sampling_seed_controlled": False,
-        "sampling_note": (
-            "CPUQVM shot sampling is not controlled by initial_parameter_seed"
-        ),
-        "qaoa_budget_accounting": "observed circuit_evaluations * shots",
+        "execution_models": {
+            "bfdcqo": BF_EXECUTION_MODEL,
+            "qaoa": QAOA_EXECUTION_MODEL,
+        },
+        "seed_scope": {
+            "bfdcqo": (
+                "solver seed controls seeded NumPy multinomial feedback "
+                "sampling from CPUQVM ideal probabilities"
+            ),
+            "qaoa": (
+                "initial_parameter_seed controls optimizer initialization "
+                "only; CPUQVM shot sampling is not seed-controlled"
+            ),
+        },
+        "budget_semantics": {
+            "bfdcqo": (
+                "total_shots and cnot_shot_executions are simulation sampling "
+                "budget/resource proxy values, not observed CPUQVM measurements"
+            ),
+            "qaoa": "observed circuit_evaluations * shots",
+        },
     }
 
 
 def run_suite(output_dir: Path, *, quick: bool) -> dict[str, object]:
     """Run quick or official CPUQVM evidence and write raw + aggregate files."""
-    repository = Path(__file__).resolve().parents[1]
+    repository = REPOSITORY_ROOT
     output_dir = Path(output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     config = QUICK if quick else OFFICIAL
@@ -372,15 +457,16 @@ def _write_report(result: dict[str, object], docs_dir: Path) -> None:
 
     report = f"""# BF-DCQO CPUQVM 基准报告
 
-本报告由 `scripts/run_bfdcqo_cpuqvm_benchmarks.py` 的 official 配置生成。软件版本为 pyqpanda-algorithm {metadata['package_version']}、PyQPanda3 {metadata['pyqpanda3_version']}、Python {metadata['python_version']}；记录的源码 commit 为 `{metadata['git_commit']}`，UTC 时间为 `{metadata['generated_at_utc']}`。
+本报告由 `scripts/run_bfdcqo_cpuqvm_benchmarks.py` 的 official 配置生成。软件版本为 pyqpanda-algorithm {metadata['package_version']}、PyQPanda3 {metadata['pyqpanda3_version']}、Python {metadata['python_version']}；记录的源码 commit 为 `{metadata['git_commit']}`、tree 为 `{metadata['git_tree']}`，驱动 SHA-256 为 `{metadata['driver_sha256']}`。运行时 `git_dirty={str(metadata['git_dirty']).lower()}`、`driver_matches_head={str(metadata['driver_matches_head']).lower()}`，UTC 时间为 `{metadata['generated_at_utc']}`。
 
 ## 配置与证据边界
 
-- `maxcut_summary.csv`：{metadata['instance_counts']['maxcut']} 个实例、{len(metadata['seeds'])} 个初值种子；BF-DCQO 使用 `{BF_BACKEND}`，QAOA 使用 `{QAOA_BACKEND}`。
-- `max3sat_summary.csv`：{metadata['instance_counts']['max3sat']} 个受控小实例、{len(metadata['seeds'])} 个初值种子；BF-DCQO 使用 `{BF_BACKEND}`，QAOA 使用 `{QAOA_BACKEND}`。
-- `family_summary.csv`：2 个受控问题、预算 {metadata['configuration']['family_budgets']}、{len(metadata['seeds'])} 个种子；全部使用 `{BF_BACKEND}`。
-- `mwis_summary.csv`：{metadata['instance_counts']['mwis']} 个受控 8 顶点实例、{len(metadata['seeds'])} 个初值种子；BF/Hybrid 使用 `{BF_BACKEND}`，QAOA 使用 `{QAOA_BACKEND}`。
-- `initial_parameter_seed` 只控制优化器初值；CPUQVM 的 shot sampling 未由该参数固定。因此结果是可复现配置下的真实采样运行，不应误写成逐 shot 确定性复现。
+- `maxcut_summary.csv`：{metadata['instance_counts']['maxcut']} 个实例、{len(metadata['seeds'])} 个种子；BF-DCQO 为 `{BF_EXECUTION_MODEL}`，QAOA 为 `{QAOA_EXECUTION_MODEL}`。
+- `max3sat_summary.csv`：{metadata['instance_counts']['max3sat']} 个受控小实例、{len(metadata['seeds'])} 个种子；BF-DCQO 为 `{BF_EXECUTION_MODEL}`，QAOA 为 `{QAOA_EXECUTION_MODEL}`。
+- `family_summary.csv`：2 个受控问题、预算 {metadata['configuration']['family_budgets']}、{len(metadata['seeds'])} 个种子；全部为 `{BF_EXECUTION_MODEL}`。
+- `mwis_summary.csv`：{metadata['instance_counts']['mwis']} 个受控 8 顶点实例、{len(metadata['seeds'])} 个种子；BF/Hybrid 为 `{BF_EXECUTION_MODEL}`，QAOA 为 `{QAOA_EXECUTION_MODEL}`。
+- BF 路径的 `seed` 控制从 CPUQVM 理想概率分布进行的 NumPy multinomial 反馈采样；其 `total_shots` 和 `cnot_shot_executions` 是模拟采样预算/资源代理，并非 CPUQVM measurement 的实测计数。
+- QAOA 路径的 `initial_parameter_seed` 只控制优化器初值，不控制 CPUQVM shot sampling；其 `total_shots` 才按实际观测的 `circuit_evaluations × shots` 核算。
 
 ## 上游 QAOA 预算核算
 
@@ -428,6 +514,8 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--docs-output", type=Path)
     args = parser.parse_args()
+    if args.quick and args.docs_output is not None:
+        parser.error("--docs-output is available in official mode only")
     result = run_suite(args.output, quick=args.quick)
     if args.docs_output is not None:
         write_curated_evidence(result, args.docs_output)
