@@ -1,9 +1,15 @@
-"""CPUQVM verification: MWIS QAOA and BF probability engines vs NumPy.
-
-Run from the repository environment or set ``PYTHONPATH`` to pyqpanda-algorithm.
-"""
+"""CPUQVM verification: MWIS QAOA and BF probability engines vs NumPy."""
 from __future__ import annotations
+
+import sys
+from pathlib import Path
+
 import numpy as np
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+PACKAGE_ROOT = REPOSITORY_ROOT / "pyqpanda-algorithm"
+sys.path.insert(0, str(PACKAGE_ROOT))
+
 from pyqpanda_alg.BFDCQO import BFDCQO, QAOASolver
 from pyqpanda_alg.BFDCQO.benchmark.mwis import default_mwis_instances
 

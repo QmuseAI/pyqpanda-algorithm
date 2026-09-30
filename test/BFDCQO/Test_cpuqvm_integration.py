@@ -1,4 +1,8 @@
 import math
+import os
+import subprocess
+import sys
+from pathlib import Path
 
 import numpy as np
 from pyqpanda3.core import CPUQVM, QProg, RY, measure
@@ -12,6 +16,24 @@ from pyqpanda_alg.BFDCQO.backends.pyqpanda3_backend import (
     pauli_rotation_recipe,
     run_bfdcqo_probabilities,
 )
+
+
+def test_cpuqvm_verifier_runs_without_caller_pythonpath(tmp_path):
+    repository_root = Path(__file__).resolve().parents[2]
+    script = repository_root / "scripts" / "verify_pyqpanda_cpuqvm.py"
+    environment = os.environ.copy()
+    environment.pop("PYTHONPATH", None)
+
+    completed = subprocess.run(
+        [sys.executable, str(script)],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "PASS:" in completed.stdout
 
 
 def test_mixed_pauli_rotation_recipe_has_complete_gate_order():
