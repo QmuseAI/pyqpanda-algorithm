@@ -52,13 +52,14 @@ def test_cpuqvm_mixed_pauli_rotation_matches_numpy_probabilities():
 
 
 def test_cpuqvm_probability_indices_are_little_endian():
-    actual = run_bfdcqo_probabilities(
+    probability = run_bfdcqo_probabilities(
         n=3,
         ry_angles=np.array([math.pi, 0.0, math.pi]),
         trotter_layers=[],
     )
 
-    assert int(np.argmax(actual)) == 0b101
+    assert int(np.argmax(probability)) == 0b101
+    assert np.isclose(probability[0b101], 1.0, atol=1e-8)
 
 
 def test_cpuqvm_count_bitstrings_match_probability_index_order():
