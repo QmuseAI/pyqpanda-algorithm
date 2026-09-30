@@ -1,28 +1,25 @@
-# PyBF-DCQO for PyQPanda
+# PyQPanda 的 PyBF-DCQO 算法族
 
-`BFDCQO` adds a modular family of bias-field digitized counterdiabatic quantum optimization solvers to `pyqpanda-algorithm`.
+`pyqpanda_alg.BFDCQO` 提供偏置场数字化反绝热量子优化（Bias-Field Digitized Counterdiabatic Quantum Optimization，BF-DCQO）算法族的模块化参考实现。模块覆盖 QUBO、原生多项式 Ising/HUBO、有限采样反馈与受预算的经典局部 refinement，并以可复现的小规模实例用于算法验证和研究 benchmark。
 
-The implementation is designed for two purposes:
+## 功能概览
 
-1. provide a transparent PyQPanda3 implementation of the published BF-DCQO protocol and its higher-order/CVaR extensions; and
-2. provide clearly separated framework extensions for finite-shot allocation and bounded hybrid refinement, with reproducible small-instance benchmarks.
-
-## Features
-
-| Capability | API | Notes |
+| 能力 | 主要 API | 说明 |
 |---|---|---|
-| Basic BF-DCQO | `BFDCQOConfig(variant="basic")` | Published BF-DCQO feedback protocol |
-| CVaR feedback | `variant="cvar"` | Low-energy sample filtering; literature-derived enhancement |
-| Adaptive shots | `variant="adaptive"` | Fixed total-shot budget redistributed across feedback rounds |
-| Adaptive + CVaR | `variant="adaptive_cvar"` | Combines finite-shot allocation and filtered feedback |
-| Hybrid refinement | `variant="hybrid"` | Bounded confidence-guided or random-block local refinement |
-| Native QUBO | `IsingProblem` / `MaxCutProblem` / `MWISProblem` | Quadratic Ising objectives |
-| Native HUBO | `PolynomialIsingProblem` | Arbitrary-order diagonal Pauli-Z objectives |
-| MAX-3-SAT | `Max3SATProblem` | Native cubic HUBO plus optional Rosenberg QUBO reduction |
-| Exact reference | `ExactSolver` | Ground truth for small regression instances |
-| QAOA benchmark | `QAOASolver` | Transparent p-layer QAOA reference adapter |
+| 基础 BF-DCQO | `BFDCQOConfig(variant="basic")` | 基础偏置场反馈协议 |
+| CVaR 反馈 | `variant="cvar"` | 使用低能样本分位更新偏置场 |
+| 自适应采样 | `variant="adaptive"` | 在固定总 shot 预算内按轮次分配样本 |
+| 自适应采样 + CVaR | `variant="adaptive_cvar"` | 组合预算分配与低能样本反馈 |
+| 受预算混合求解 | `variant="hybrid"` | 量子阶段后执行置信度引导或随机块局部搜索 |
+| QUBO / 二次 Ising | `IsingProblem`、`MaxCutProblem`、`MWISProblem` | 二次对角目标函数 |
+| 原生 HUBO | `PolynomialIsingProblem` | 任意阶对角 Pauli-Z 目标函数 |
+| MAX-3-SAT | `Max3SATProblem` | 原生三次 HUBO，也可作 Rosenberg QUBO 约化 |
+| 小规模精确参照 | `ExactSolver` | 为回归测试和诊断提供精确基态 |
+| QAOA 对照 | `QAOASolver` | 可检查的 p-layer QAOA benchmark 适配器 |
 
-## Unified API
+## 统一 API
+
+推荐通过 `BFDCQOSolver` 与 `BFDCQOConfig` 选择算法变体；研究实验仍可直接使用公开的底层求解器类。下面示例可直接运行，`backend="numpy"` 用于确定性的参考验证；安装并配置 PyQPanda3 后可改为 `backend="pyqpanda"`。
 
 ```python
 from pyqpanda_alg.BFDCQO import BFDCQOConfig, BFDCQOSolver, MaxCutProblem
@@ -39,31 +36,27 @@ config = BFDCQOConfig(
     total_shot_budget=3072,
     cvar_alpha=0.10,
 )
-
-result = BFDCQOSolver(
-    problem,
-    config,
-    backend="pyqpanda",
-    seed=7,
-).solve()
+result = BFDCQOSolver(problem, config, backend="numpy", seed=7).solve()
 
 print(result.best_solution, result.best_energy, result.total_shots)
 ```
 
-For deterministic reference validation, use `backend="numpy"`. The recommended production-facing entry point is the unified `BFDCQOSolver`; low-level solver classes remain public for research experiments.
+## 原生 HUBO
 
-## Native HUBO
-
-A diagonal higher-order objective is represented directly as
+高阶对角目标直接表示为
 
 $$
 H = c + \sum_S J_S \prod_{i\in S} Z_i.
 $$
 
-For example:
+无需先引入辅助变量把高阶项降为二次项：
 
 ```python
-from pyqpanda_alg.BFDCQO import PolynomialIsingProblem
+from pyqpanda_alg.BFDCQO import (
+    BFDCQOConfig,
+    BFDCQOSolver,
+    PolynomialIsingProblem,
+)
 
 problem = PolynomialIsingProblem(
     n=4,
@@ -74,65 +67,78 @@ problem = PolynomialIsingProblem(
     },
     offset=0.1,
 )
+result = BFDCQOSolver(
+    problem,
+    BFDCQOConfig(variant="basic", iterations=4, shots=256),
+    backend="numpy",
+    seed=7,
+).solve()
+
+print(result.best_solution, result.best_energy)
 ```
 
-The first-order nested-commutator adiabatic gauge potential is constructed with sparse Pauli algebra, so the same implementation supports two-body and higher-order terms. The PyQPanda3 backend decomposes arbitrary Pauli rotations through basis changes and a parity CNOT ladder.
+一阶嵌套对易子绝热规范势（adiabatic gauge potential）由稀疏 Pauli 代数构造，因此同一路径同时支持二体与高阶项。PyQPanda3 后端通过基变换和 parity CNOT ladder 分解任意 Pauli rotation。
 
-## Solver variants
+## 求解器变体
 
-### Basic BF-DCQO
+### 基础 BF-DCQO
 
-Each round prepares the biased product-state ground state, applies digitized counterdiabatic evolution, measures the output distribution, and uses the resulting $\langle Z_i\rangle$ values as the next longitudinal bias.
+每轮从带偏置的乘积态基态出发，执行数字化 counterdiabatic 演化并测量输出分布，再以所得 $\langle Z_i\rangle$ 更新下一轮纵向偏置。
 
 ### CVaR BF-DCQO
 
-Only the lowest-energy fraction `cvar_alpha` of sampled probability mass is used to update the bias. The implementation treats a cutoff crossing a degenerate energy level proportionally, avoiding an artificial bitstring-order bias.
+仅用最低能量的 `cvar_alpha` 比例样本质量更新偏置。若截断点穿过简并能级，实现会按比例纳入该能级，避免由 bitstring 排序引入人为偏差。
 
-### Adaptive-shot BF-DCQO
+### 自适应采样 BF-DCQO
 
-A total sampling budget is reserved up front. Later rounds receive more precision as the mean bias confidence increases, while a minimum allocation is reserved for every remaining round. Optional early stopping uses both uncertainty and bias change.
+预先限定 `total_shot_budget`，根据平均偏置置信度为后续轮次分配采样精度，同时为剩余每轮保留最小配额。可选提前停止同时检查不确定度和偏置变化。
 
 ### Hybrid BF-DCQO
 
-The final all-shot bias estimates define variable confidence $c_i=|\langle Z_i\rangle|$. A small exact block neighborhood is then searched over the least-confident variables. The local evaluation count is explicit in the result and can be matched against a random-block ablation.
+量子阶段结束后，以 $c_i=|\langle Z_i\rangle|$ 衡量变量置信度，并在最低置信度变量组成的小块邻域内进行精确局部搜索。结果对象显式记录经典局部评估次数，可在相同预算下与随机块消融对照。
 
-## Applications and benchmarks
+## 应用与 benchmark
 
-Included examples cover:
+仓库示例和 benchmark 包括：
 
-- weighted MaxCut (QUBO),
-- weighted maximum independent set (MWIS, QUBO),
-- weighted MAX-3-SAT (native cubic HUBO), and
-- native-HUBO versus quadratized-QAOA resource/quality comparisons.
+- 加权 MaxCut（QUBO）；
+- 加权最大独立集 MWIS（QUBO）；
+- 加权 MAX-3-SAT（原生三次 HUBO）；
+- 原生 HUBO 与经 quadratization 后 QAOA 的资源及质量对照；
+- 基础、CVaR、自适应采样与 Hybrid 变体在固定小规模实例上的对照。
 
-The competition benchmark artifacts live outside the source package under `benchmark/`. They deliberately separate **algorithm code** from **reproducibility evidence**.
+这些内容将算法实现与可复现实验分开组织，benchmark 结果用于研究比较，不构成对大规模硬件表现的外推。
 
-## Correctness strategy
+## 正确性验证
 
-The test suite checks, among other items:
+测试覆盖以下性质：
 
-- QUBO/HUBO energy preservation for every basis state of small fixtures;
-- sparse-Pauli commutators against dense-matrix calculations;
-- Pauli rotations against `scipy.linalg.expm`;
-- biased product-state preparation;
-- shot-budget conservation;
-- CVaR degeneracy handling;
-- native-HUBO MAX-3-SAT encoding and Rosenberg quadratization;
-- bounded confidence-guided versus random local-search budgets; and
-- NumPy/PyQPanda3 distribution equality when PyQPanda3 is available.
+- 对小规模 fixture 的每个计算基态核对 QUBO/HUBO 能量保持；
+- 稀疏 Pauli 对易子与稠密矩阵计算一致；
+- Pauli rotation 与 `scipy.linalg.expm` 一致；
+- 带偏置乘积态制备与 shot 预算守恒；
+- CVaR 简并截断处理；
+- 原生 HUBO MAX-3-SAT 编码与 Rosenberg quadratization；
+- 相同预算下置信度引导与随机局部搜索的比较；
+- 在 PyQPanda3 可用时核对 NumPy 与 PyQPanda3 输出分布。
 
-## Scope and limitations
+## 适用范围与限制
 
-This contribution is currently a **small-instance algorithm/reference implementation and benchmark suite**. Exact ground-state diagnostics and the NumPy reference backend enumerate the full computational basis. Before using the same code path for large hardware instances, exact diagnostics should be made optional and hardware execution should consume sampled counts without materializing a full statevector.
+当前实现定位为**小规模算法验证、教学与 benchmark 的参考实现**。精确基态诊断以及部分指标会枚举完整计算基，NumPy 参考后端还会维护完整状态向量，因此其时间和内存开销随问题规模快速增长。
 
-Benchmark numbers bundled with the competition package were generated with the independent NumPy statevector reference backend because PyQPanda3 was unavailable in the build container. They are not labelled as CPUQVM results. A no-fallback CPUQVM cross-check script is supplied for local validation.
+在完成 count-only 执行路径，并把精确基态诊断改为可选项之前，本项目不声称能够沿当前代码路径直接扩展到大规模量子硬件。硬件实验还应单独评估设备拓扑、编译、噪声、采样预算和执行服务约束。
 
-## References and attribution
+## 参考文献与归属
 
-The implementation is independent and based on public equations; no proprietary Kipu Quantum implementation code is included.
+本实现依据公开论文中的算法和公式独立编写，不包含第三方专有实现代码。归属边界如下：
 
-- A. Gomez Cadavid *et al.*, **Bias-field digitized counterdiabatic quantum optimization**, Phys. Rev. Research 7, L022010 (2025), arXiv:2405.13898.
-- S. V. Romero *et al.*, **Bias-Field Digitized Counterdiabatic Quantum Algorithm for Higher-Order Binary Optimization**, Communications Physics 8, 348 (2025), arXiv:2409.04477.
-- P. Chandarana *et al.*, **Hybrid Sequential Quantum Computing**, arXiv:2510.05851 (2025).
+- Basic BF-DCQO 的核心协议归于 A. Gomez Cadavid 等人的工作。
+- native HUBO、CVaR BF-DCQO 与 MAX-3-SAT 构造归于 S. V. Romero 等人的工作。
+- MWIS 是既有组合优化应用，本项目仅将其作为 QUBO 验证问题，不主张其为新的 BF-DCQO 应用。
+- 经典 refinement 的先行概念可参见 Hybrid Sequential Quantum Computing（HSQC）；本实现提供的是受预算、可记录评估次数的工程化对照路径。
 
-See `INNOVATION_BOUNDARY.md` in the competition package for an explicit prior-work/contribution matrix.
+参考文献：
+
+1. A. Gomez Cadavid *et al.*, **Bias-field digitized counterdiabatic quantum optimization**, *Physical Review Research* 7, L022010 (2025), arXiv:2405.13898.
+2. S. V. Romero *et al.*, **Bias-Field Digitized Counterdiabatic Quantum Algorithm for Higher-Order Binary Optimization**, *Communications Physics* 8, 348 (2025), arXiv:2409.04477.
+3. P. Chandarana *et al.*, **Hybrid Sequential Quantum Computing**, arXiv:2510.05851 (2025).
