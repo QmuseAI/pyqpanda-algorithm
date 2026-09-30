@@ -1,14 +1,15 @@
 # BF-DCQO CPUQVM 基准报告
 
-本报告由 `scripts/run_bfdcqo_cpuqvm_benchmarks.py` 的 official 配置生成。软件版本为 pyqpanda-algorithm 2.0.0、PyQPanda3 0.3.5、Python 3.13.9；记录的源码 commit 为 `244210a9c0ab38d80f4b3f9bbd686be0682b3b5d`，UTC 时间为 `2026-09-30T10:18:00.659835+00:00`。
+本报告由 `scripts/run_bfdcqo_cpuqvm_benchmarks.py` 的 official 配置生成。软件版本为 pyqpanda-algorithm 2.0.0、PyQPanda3 0.3.5、Python 3.13.9；记录的源码 commit 为 `945c466890e8c2312d99b6e3814a22c7fa882653`、tree 为 `3f0cdde526ea440f8093920ff239fb1bfd02f1f4`，驱动 SHA-256 为 `9d91900e7b7a019452c0fe093980bfe35e490b9c6398ad5a486e38c88967dfb2`。运行时 `git_dirty=false`、`driver_matches_head=true`，UTC 时间为 `2026-09-30T10:40:08.897155+00:00`。
 
 ## 配置与证据边界
 
-- `maxcut_summary.csv`：3 个实例、3 个初值种子；BF-DCQO 使用 `pyqpanda3.CPUQVM`，QAOA 使用 `pyqpanda_alg.QAOA.CPUQVM`。
-- `max3sat_summary.csv`：2 个受控小实例、3 个初值种子；BF-DCQO 使用 `pyqpanda3.CPUQVM`，QAOA 使用 `pyqpanda_alg.QAOA.CPUQVM`。
-- `family_summary.csv`：2 个受控问题、预算 [1536, 3072, 6144]、3 个种子；全部使用 `pyqpanda3.CPUQVM`。
-- `mwis_summary.csv`：3 个受控 8 顶点实例、3 个初值种子；BF/Hybrid 使用 `pyqpanda3.CPUQVM`，QAOA 使用 `pyqpanda_alg.QAOA.CPUQVM`。
-- `initial_parameter_seed` 只控制优化器初值；CPUQVM 的 shot sampling 未由该参数固定。因此结果是可复现配置下的真实采样运行，不应误写成逐 shot 确定性复现。
+- `maxcut_summary.csv`：3 个实例、3 个种子；BF-DCQO 为 `PyQPanda3 CPUQVM ideal probabilities + seeded NumPy multinomial feedback sampling`，QAOA 为 `pyqpanda_alg.QAOA.CPUQVM shot execution`。
+- `max3sat_summary.csv`：2 个受控小实例、3 个种子；BF-DCQO 为 `PyQPanda3 CPUQVM ideal probabilities + seeded NumPy multinomial feedback sampling`，QAOA 为 `pyqpanda_alg.QAOA.CPUQVM shot execution`。
+- `family_summary.csv`：2 个受控问题、预算 [1536, 3072, 6144]、3 个种子；全部为 `PyQPanda3 CPUQVM ideal probabilities + seeded NumPy multinomial feedback sampling`。
+- `mwis_summary.csv`：3 个受控 8 顶点实例、3 个种子；BF/Hybrid 为 `PyQPanda3 CPUQVM ideal probabilities + seeded NumPy multinomial feedback sampling`，QAOA 为 `pyqpanda_alg.QAOA.CPUQVM shot execution`。
+- BF 路径的 `seed` 控制从 CPUQVM 理想概率分布进行的 NumPy multinomial 反馈采样；其 `total_shots` 和 `cnot_shot_executions` 是模拟采样预算/资源代理，并非 CPUQVM measurement 的实测计数。
+- QAOA 路径的 `initial_parameter_seed` 只控制优化器初值，不控制 CPUQVM shot sampling；其 `total_shots` 才按实际观测的 `circuit_evaluations × shots` 核算。
 
 ## 上游 QAOA 预算核算
 
